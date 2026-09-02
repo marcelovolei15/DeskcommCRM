@@ -28,14 +28,36 @@ import { describe, expect, it } from "vitest";
  * Ler `title` no SERVIDOR para outra finalidade — um relatório do próprio dono
  * da agenda, um export de LGPD para o titular — não é o que está em jogo. O que
  * se guarda é a travessia para a TELA da Agenda, que é onde a exposição
- * acontece. Por isso o recorte é `app/app/agenda/**`, e não o repo inteiro.
+ * acontece. Por isso o recorte são os caminhos que ALIMENTAM essa tela, e não o
+ * repo inteiro.
+ *
+ * ─── Por que o recorte tem DOIS caminhos, e não só `app/app/agenda/**` ───────
+ * O gate nasceu quando a ocupação vinha de um lugar só: a semente que a página
+ * do servidor consultava. Enquanto foi assim, `app/app/agenda/**` era a tela
+ * inteira.
+ *
+ * Deixou de ser: a ocupação passou a ser devolvida também por
+ * `GET /api/v1/agenda/agendamentos` — que é o caminho VIVO, o que sobrevive à
+ * troca de semana e de mês, e portanto o que a pessoa realmente vê. Uma consulta
+ * lá pedindo `title` chegaria à mesma tela multi-tenant sem tocar em nenhum
+ * arquivo deste recorte, e este gate ficaria verde dizendo que mediu.
+ *
+ * O controle positivo não pega isso sozinho: a semente continua existindo em
+ * `app/app/agenda/page.tsx`, então `>= 1` seguiria satisfeito com o caminho novo
+ * inteiramente fora de vista. Guarda de ausência que mede o lugar errado é pior
+ * que guarda nenhuma — ela afirma.
  *
  * Se um dia a decisão mudar, o caminho é POR ORGANIZAÇÃO e com aviso de quem vê
  * — nunca por default. Quem for fazer isso troca este teste junto, de propósito:
  * é o passo que obriga a decisão a ser tomada por gente.
  */
 const RAIZ = process.cwd();
-const TELA_DA_AGENDA = path.join(RAIZ, "app", "app", "agenda");
+
+/** Os dois caminhos que desenham a grade: a semente do servidor e a rota viva. */
+const CAMINHOS_QUE_ALIMENTAM_A_TELA = [
+  path.join(RAIZ, "app", "app", "agenda"),
+  path.join(RAIZ, "app", "api", "v1", "agenda"),
+];
 
 function arquivos(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -60,7 +82,7 @@ function semComentarios(fonte: string): string {
  */
 function consultasDeEventoExterno(): Array<{ onde: string; colunas: string }> {
   const out: Array<{ onde: string; colunas: string }> = [];
-  for (const arquivo of arquivos(TELA_DA_AGENDA)) {
+  for (const arquivo of CAMINHOS_QUE_ALIMENTAM_A_TELA.flatMap(arquivos)) {
     const fonte = semComentarios(fs.readFileSync(arquivo, "utf8"));
     const rel = path.relative(RAIZ, arquivo);
     for (const m of fonte.matchAll(/\.from\("calendar_external_events"\)([\s\S]*?);/g)) {
@@ -76,15 +98,16 @@ function consultasDeEventoExterno(): Array<{ onde: string; colunas: string }> {
 }
 
 describe("a ocupação do Google não leva o nome do evento para a tela", () => {
-  it("a tela da Agenda consulta os eventos externos (senão o gate mede o vazio)", () => {
+  it("a Agenda consulta os eventos externos (senão o gate mede o vazio)", () => {
     // Controle do instrumento. Sem isto, mover a consulta ou renomear o
     // diretório deixaria o gate verde por não medir nada — e ele afirmaria o que
     // não mediu, que é o pior desfecho para uma guarda de privacidade.
     const consultas = consultasDeEventoExterno();
     expect(
       consultas.length,
-      "nenhuma consulta a `calendar_external_events` em `app/app/agenda/` — ou a " +
-        "ocupação deixou de ser buscada, ou ela mudou de lugar e este gate ficou cego",
+      "nenhuma consulta a `calendar_external_events` em `app/app/agenda/` nem em " +
+        "`app/api/v1/agenda/` — ou a ocupação deixou de ser buscada, ou ela mudou de lugar " +
+        "e este gate ficou cego",
     ).toBeGreaterThanOrEqual(1);
   });
 
