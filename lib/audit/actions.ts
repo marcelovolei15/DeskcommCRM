@@ -116,6 +116,9 @@ export const AUDIT_ACTIONS = [
   // Uma rodada do cron `recover-stuck-messages` que de fato marcou mensagem
   // como falha (rodada vazia não vira linha — varredura não é mutação).
   "message.recover_stuck_run",
+  // Idem para o cron `birthday-greetings`: só audita a rodada que enviou
+  // pelo menos uma mensagem.
+  "message.birthday_greetings_run",
   "contact.blocked",
   "ai.handoff_triggered",
   "ai.reactivated_by_agent",
