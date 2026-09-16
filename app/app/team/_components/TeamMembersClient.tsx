@@ -1,5 +1,6 @@
 "use client";
 
+import { MemberInterfaceDialog } from "@/components/team/MemberInterfaceDialog";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -7,6 +8,7 @@ import { toast } from "sonner";
 import { useT } from "@/hooks/i18n/useT";
 import { useTeamMembers, type TeamMember } from "@/hooks/team/useTeamMembers";
 import { useChangeRole } from "@/hooks/team/useChangeRole";
+import { useReactivateMember } from "@/hooks/team/useReactivateMember";
 import { useRevokeMember } from "@/hooks/team/useRevokeMember";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,7 +55,9 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
   const { data, isLoading, isError } = useTeamMembers();
   const changeRole = useChangeRole();
   const revoke = useRevokeMember();
+  const reativar = useReactivateMember();
 
+  const [interfaceMember, setInterfaceMember] = useState<TeamMember | null>(null);
   const [revokeDialog, setRevokeDialog] = useState<TeamMember | null>(null);
 
   if (isLoading) {
@@ -75,6 +79,7 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
             <TableRow>
               <TableHead>{t("Membro")}</TableHead>
               <TableHead>Role</TableHead>
+              <TableHead>{t("Interface")}</TableHead>
               <TableHead>{t("Status")}</TableHead>
               <TableHead>{t("Última atividade")}</TableHead>
               {canManage ? <TableHead className="w-[80px]" /> : null}
@@ -84,10 +89,10 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
             {members.map((m) => (
               <TableRow key={m.user_id}>
                 <TableCell>
-                  <div className="font-medium">{m.full_name ?? m.email ?? m.user_id.slice(0, 8)}</div>
-                  {m.email ? (
-                    <div className="text-xs text-muted-foreground">{m.email}</div>
-                  ) : null}
+                  <div className="font-medium">
+                    {m.full_name ?? m.email ?? m.user_id.slice(0, 8)}
+                  </div>
+                  {m.email ? <div className="text-xs text-muted-foreground">{m.email}</div> : null}
                 </TableCell>
                 <TableCell>
                   {canManage && m.user_id !== currentUserId ? (
@@ -116,7 +121,40 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
                   )}
                 </TableCell>
                 <TableCell>
-                  {m.accepted_at ? (
+                  {canManage ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`${t("Interface de")} ${m.full_name ?? m.email ?? m.user_id}`}
+                      onClick={() => setInterfaceMember(m)}
+                    >
+                      {m.interface_settings?.destinos
+                        ? t("Personalizada")
+                        : m.interface_settings?.preset === "simplificada"
+                          ? t("Simplificada")
+                          : t("Completa")}
+                    </Button>
+                  ) : (
+                    <span>
+                      {m.interface_settings?.destinos
+                        ? t("Personalizada")
+                        : m.interface_settings?.preset === "simplificada"
+                          ? t("Simplificada")
+                          : t("Completa")}
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {/*
+                    "Revogado" vem ANTES dos outros dois: quem foi revogado tem
+                    `accepted_at` preenchido (ele aceitou um dia), e sem esta
+                    ordem apareceria como "Aceito" — dizendo o contrário do que
+                    é. Até 2026-09-10 a linha nem chegava aqui: a rota filtrava
+                    revogado fora e a pessoa simplesmente sumia da equipe.
+                  */}
+                  {m.revoked_at ? (
+                    <Badge variant="destructive">{t("Revogado")}</Badge>
+                  ) : m.accepted_at ? (
                     <Badge variant="default">{t("Aceito")}</Badge>
                   ) : (
                     <Badge variant="outline">{t("Pendente")}</Badge>
@@ -137,12 +175,28 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => setRevokeDialog(m)}
-                          >
-                            {t("Revogar acesso")}
-                          </DropdownMenuItem>
+                          {/*
+                            Revogar e reativar são exclusivos: oferecer os dois
+                            na mesma linha convidaria ao clique errado. Sem o
+                            ramo de reativar, a única volta era emitir convite
+                            novo — caminho longo e cheio de beco, medido com
+                            uma pessoa de verdade presa nele em 2026-09-10.
+                          */}
+                          {m.revoked_at ? (
+                            <DropdownMenuItem
+                              disabled={reativar.isPending}
+                              onClick={() => void reativar.mutateAsync(m.user_id)}
+                            >
+                              {t("Devolver acesso")}
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => setRevokeDialog(m)}
+                            >
+                              {t("Revogar acesso")}
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : (
@@ -156,12 +210,20 @@ export function TeamMembersClient({ currentUserId, canManage }: Props) {
         </Table>
       </div>
 
+      {interfaceMember && (
+        <MemberInterfaceDialog
+          key={interfaceMember.user_id}
+          member={interfaceMember}
+          onClose={() => setInterfaceMember(null)}
+        />
+      )}
       <Dialog open={!!revokeDialog} onOpenChange={(o) => !o && setRevokeDialog(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("Revogar acesso")}</DialogTitle>
             <DialogDescription>
-              {revokeDialog?.email ?? revokeDialog?.user_id} {t("perderá acesso ao tenant. Esta ação pode ser desfeita reconvidando o membro.")}
+              {revokeDialog?.email ?? revokeDialog?.user_id}{" "}
+              {t("perderá acesso ao tenant. Esta ação pode ser desfeita reconvidando o membro.")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

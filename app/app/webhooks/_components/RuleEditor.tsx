@@ -69,11 +69,26 @@ const MESSAGE_FIELDS: CuratedField[] = [
   { value: "event.body_preview", label: "Texto da mensagem", op: "contains" },
   { value: "contact.tags", label: "Tags do contato", op: "contains" },
 ];
+const CONTACT_FIELDS: CuratedField[] = [
+  { value: "contact.tags", label: "Tags do contato", op: "contains" },
+  { value: "contact.name", label: "Nome do contato", op: "contains" },
+];
 const TAG_ADDED_FIELD: CuratedField = {
   value: "event.added_tags",
   label: "Tag adicionada",
   op: "contains",
 };
+
+/**
+ * O tipo vem do PAYLOAD, não da linha do compromisso, e é de propósito: a linha
+ * guarda `event_type_id`, um uuid que ninguém digita numa condição. O nome
+ * viajou no evento justamente para caber aqui, e `contém` resolve o caso real
+ * ("Manutenção" pega as três).
+ */
+const AGENDAMENTO_FIELDS: CuratedField[] = [
+  { value: "event.event_type_name", label: "Tipo de atendimento", op: "contains" },
+  { value: "contact.tags", label: "Tags do contato", op: "contains" },
+];
 
 // ponytail: etapa de destino usa o funil default (cobre o caso comum de 1
 // funil); se o produto ganhar múltiplos funis relevantes aqui, trocar por um
@@ -84,6 +99,14 @@ const CURATED_FIELDS: Record<TriggerEvent, CuratedField[]> = {
   "message.received": MESSAGE_FIELDS,
   "lead.tag_added": [...LEAD_FIELDS, TAG_ADDED_FIELD],
   "contact.tag_added": [TAG_ADDED_FIELD],
+  "appointment.created": AGENDAMENTO_FIELDS,
+  "appointment.confirmed": AGENDAMENTO_FIELDS,
+  "appointment.rescheduled": AGENDAMENTO_FIELDS,
+  "appointment.cancelled": AGENDAMENTO_FIELDS,
+  // O aniversário não tem campo próprio para filtrar: o que a organização quer
+  // decidir é sobre QUEM faz aniversário, e não sobre a data. Por isso os campos
+  // são os do contato — "só quem tem a tag cliente", tipicamente.
+  "contact.birthday": CONTACT_FIELDS,
 };
 
 const OP_LABELS: Record<Op, string> = { eq: "é", neq: "não é", contains: "contém" };

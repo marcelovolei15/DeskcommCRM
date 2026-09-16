@@ -75,20 +75,34 @@ um falso verde — o isolamento RLS não foi exercitado.
 ## Checks obrigatórios — detalhe de cada um
 
 - **`verify`** (`ci.yml`) — typecheck + lint + test:unit.
-- **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg17`,
-  aplica `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update
+- **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg15` — o
+  PISO que dizemos suportar, não a versão mais rica que temos à mão —, aplica
+  `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update
   (idempotência), e roda os testes de invariante, incluindo o de isolamento RLS
-  entre 2 organizações.
+  entre 2 organizações. **Já foi pg17**, até um `pg_dump` emitir 9 `GRANT
+  MAINTAIN` sozinho; hoje quem guarda o piso é
+  `tests/unit/baseline-no-piso-do-postgres.test.ts` — não confie neste número,
+  reconfira ali.
 - **`build-and-size`** (`perf.yml`) — `pnpm build` em Node 22.
 - **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda
   **todas as specs Playwright menos uma**. O número saiu daqui de propósito:
   ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando
   `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar
   de recontar já tinha vencido na quarta. Quem precisa do número roda o
-  comando abaixo — comando não envelhece. A **única** de fora é
-  `vps-fresh-onboarding` (precisa de WAHA + Redis + Resend + Nuvemshop) — e ela
-  é a **P0** da doutrina de QA Visual, ou seja, `e2e` verde **não** prova a
-  jornada de instalação fresca, que é o produto que se vende.
+  comando abaixo — comando não envelhece. **Não confie em "a única de fora"**:
+  essa frase já esteve errada aqui (em 2026-09-04 a variável `FORA_DO_CI`
+  listava **duas**, depois que `inbox-tempo-real` entrou junto de
+  `vps-fresh-onboarding`) — é o mesmo defeito que este parágrafo descreve,
+  cometido na frase seguinte à que o denuncia. O que segue verdade: quem quer
+  que seja que esteja fora, `vps-fresh-onboarding` é sempre a **P0** da
+  doutrina de QA Visual, ou seja, `e2e` verde **não** prova a jornada de
+  instalação fresca, que é o produto que se vende. Pra ver quem está fora
+  agora, sem confiar em número escrito:
+
+  ```bash
+  git show origin/main:.github/workflows/e2e.yml | \
+    python3 -c "import sys,re; y=sys.stdin.read(); print(sorted({s for _,c in re.findall(r'(FORA_DO_CI):\s*>-\n((?:[ ]{8,}.*\n)+)',y) for s in re.findall(r'[a-z0-9-]+\.spec\.ts',c)}))"
+  ```
 
   **Não confie em `grep` no arquivo inteiro.**
   `grep -oE '[a-z0-9-]+\.spec\.ts' .github/workflows/e2e.yml | sort -u | wc -l`

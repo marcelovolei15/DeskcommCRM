@@ -12,7 +12,13 @@ import { loadAuthUser } from "@/lib/auth/server";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { extractChangelogRange } from "@/lib/system/changelog";
-import { isRunStale, type RunStatus, type RunStep } from "@/lib/system/update-run";
+import {
+  isRunStale,
+  rollbackFoiSuperado,
+  sucessoJaInstalado,
+  type RunStatus,
+  type RunStep,
+} from "@/lib/system/update-run";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +35,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
   const { data: version, error: versionError } = await db
     .from("system_version")
     .select(
-      "current_version, latest_version, off_release, compare_failed, has_known_release, changelog_raw, agent_last_seen_at",
+      "current_version, latest_version, off_release, compare_failed, has_known_release, changelog_raw, agent_last_seen_at, updated_at",
     )
     .eq("id", 1)
     .maybeSingle();
@@ -55,7 +61,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
   // rodando.
   const { data: run, error: runError } = await db
     .from("system_update_runs")
-    .select("id, status, last_step, dispatched_at, from_version, to_version, log_tail")
+    .select("id, status, last_step, dispatched_at, finished_at, from_version, to_version, log_tail")
     .order("dispatched_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -72,8 +78,36 @@ export async function GET(_req: NextRequest): Promise<Response> {
   // rollback, o host reporta a versão nova (o `git checkout` deu certo; quem
   // não subiu foi o container), então `current_version` nomearia justamente a
   // versão que quebrou. Quem sabe qual imagem voltou ao ar é o run.
+  //
+  // Mas o run só sabe disso ENQUANTO ninguém trocou o app por outro caminho — e
+  // trocar por outro caminho é o normal: `docker compose up -d`, deploy por CI,
+  // `update.sh` no terminal. Nenhum deles cria run. Sem fim de validade, um
+  // rollback de agosto seguia nomeando a versão no ar em setembro (medido em
+  // produção: o rodapé anunciava `3414a2df` oito dias e vários deploys depois).
+  //
+  // O desempate é temporal e vem do próprio banco: `system_version.updated_at`
+  // é gravado pelo agente do host a cada batida, e se ele é POSTERIOR ao fim do
+  // run, o agente viu o mundo mais recente. Sem o par de datas — run de um
+  // agente antigo, sem `finished_at` — fica valendo o run, que continua sendo a
+  // informação mais específica que a instalação tem.
+  const rollbackSuperado = rollbackFoiSuperado(
+    version?.updated_at,
+    run?.finished_at,
+    current,
+    run,
+  );
+  // O outro lado do mesmo silêncio: o run deu CERTO e o host ainda não bateu.
+  // `current_version` segue nomeando a versão antiga por até 5 minutos, e sem
+  // isto `update_available` continua verdadeiro — a tela volta do reinício
+  // oferecendo "Atualizar agora" para a versão que acabou de ser instalada.
+  const acabouDeInstalar = sucessoJaInstalado(version?.updated_at, run?.finished_at, run);
+
   const running =
-    run?.status === "failed_rolled_back" && run.from_version ? run.from_version : current;
+    run?.status === "failed_rolled_back" && run.from_version && !rollbackSuperado
+      ? run.from_version
+      : acabouDeInstalar && run?.to_version
+        ? run.to_version
+        : current;
 
   if (!user.is_platform_admin) {
     return ok({ current_version: running, is_owner: false });
@@ -107,6 +141,11 @@ export async function GET(_req: NextRequest): Promise<Response> {
     // não tocada por nenhum heartbeat, coluna com o default da migration).
     has_known_release: version?.has_known_release ?? true,
     agent_online: !Number.isNaN(lastSeen) && now.getTime() - lastSeen < AGENT_OFFLINE_AFTER_MS,
+    // A janela em que a atualização TERMINOU e o host ainda não contou. É o que
+    // deixa a tela dizer "pronto, está na versão X" em vez de cair no texto
+    // genérico de quem nunca atualizou nada — e ela se fecha sozinha na batida
+    // seguinte do agente.
+    just_updated: acabouDeInstalar,
     notes:
       faixa && faixa.secoes.length > 0
         ? {
@@ -127,6 +166,10 @@ export async function GET(_req: NextRequest): Promise<Response> {
     run: run
       ? {
           id: run.id,
+          // A tela CONTA o tempo desde aqui. Sem esta data, o intervalo entre o
+          // clique e o agente pegar o pedido é uma lista de quatro círculos
+          // vazios, parada, sem nada que se mexa.
+          dispatched_at: run.dispatched_at,
           // `unknown` é derivado aqui, não gravado: um agente morto não
           // consegue anunciar a própria morte.
           status:

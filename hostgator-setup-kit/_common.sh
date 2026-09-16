@@ -4,6 +4,7 @@ set -euo pipefail
 
 COMPOSE="docker-compose.prod.yml"
 COMPOSE_TRAEFIK="docker-compose.traefik.yml"
+COMPOSE_NPM="docker-compose.npm.yml"
 
 # Proxy reverso desta instalação. Vem do .env (load_env), com default 'caddy' —
 # ou seja, toda instalação que já existe continua exatamente como está.
@@ -12,26 +13,30 @@ COMPOSE_TRAEFIK="docker-compose.traefik.yml"
 #   traefik → a VPS JÁ tem um Traefik nessas portas (Hostinger, Coolify,
 #             Dokploy...). Entra o override, que desliga o Caddy e publica o app
 #             por labels. Ver o cabeçalho de docker-compose.traefik.yml.
+#   npm     → a VPS JÁ tem um Nginx Proxy Manager nessas portas (não lê labels
+#             Docker — o roteamento é manual, na UI dele). Entra o override, que
+#             desliga o Caddy e garante o `app` na rede/IP que o Proxy Host
+#             espera. Ver o cabeçalho de docker-compose.npm.yml.
 #
 # Todo `docker compose` do kit passa por aqui: com proxy externo, um comando sem
-# o override subiria o Caddy e ele iria bater de frente com o Traefik.
+# o override subiria o Caddy e ele iria bater de frente com o proxy da hospedagem.
 dc() {
-  if [ "${REVERSE_PROXY:-caddy}" = "traefik" ]; then
-    docker compose -f "$COMPOSE" -f "$COMPOSE_TRAEFIK" "$@"
-  else
-    docker compose -f "$COMPOSE" "$@"
-  fi
+  case "${REVERSE_PROXY:-caddy}" in
+  traefik) docker compose -f "$COMPOSE" -f "$COMPOSE_TRAEFIK" "$@" ;;
+  npm)     docker compose -f "$COMPOSE" -f "$COMPOSE_NPM" "$@" ;;
+  *)       docker compose -f "$COMPOSE" "$@" ;;
+  esac
 }
 
 # A mesma lista de -f, como texto, para as mensagens que ensinam o comando ao
 # dono. Se a mensagem omitisse o override numa instalação com proxy externo, o
 # próprio dono derrubaria o site seguindo a instrução do kit.
 dc_files() {
-  if [ "${REVERSE_PROXY:-caddy}" = "traefik" ]; then
-    printf -- '-f %s -f %s' "$COMPOSE" "$COMPOSE_TRAEFIK"
-  else
-    printf -- '-f %s' "$COMPOSE"
-  fi
+  case "${REVERSE_PROXY:-caddy}" in
+  traefik) printf -- '-f %s -f %s' "$COMPOSE" "$COMPOSE_TRAEFIK" ;;
+  npm)     printf -- '-f %s -f %s' "$COMPOSE" "$COMPOSE_NPM" ;;
+  *)       printf -- '-f %s' "$COMPOSE" ;;
+  esac
 }
 
 # ── A rede externa por onde o proxy de fora alcança o app ────────────────────
@@ -171,6 +176,18 @@ veredito_rede_do_proxy() {  # veredito_rede_do_proxy <driver encontrado> <rede> 
 # Define TRAEFIK_NETWORK quando ela vem vazia — de propósito, é o mesmo default
 # que o instalador grava no .env.
 garantir_rede_do_proxy() {
+  # NPM nunca é criado por nós: a rede é sempre do stack do Proxy Manager (ou de
+  # quem hospeda), então não há "nossa" bridge para oferecer — só checar e, se
+  # sumiu (prune, down -v), morrer explicando em vez do opaco erro do compose.
+  if [ "${REVERSE_PROXY:-caddy}" = "npm" ]; then
+    local rede
+    rede="${PROXY_NETWORK_NAME:-proxy_network}"
+    docker network inspect "$rede" >/dev/null 2>&1 && return 0
+    die "A rede Docker '$rede' (a do Nginx Proxy Manager) não existe.
+Rode 'docker network ls', identifique a rede do seu NPM (Settings > a que o
+contêiner dele já está conectado) e ponha PROXY_NETWORK_NAME=<nome> no .env
+antes de tentar de novo."
+  fi
   [ "${REVERSE_PROXY:-caddy}" = "traefik" ] || return 0
   local nossa drv erro
   nossa="$(rede_reservada_do_proxy)"
@@ -469,16 +486,29 @@ ultima_versao_publicada() {
 # repositório público não muda isso. Enquanto ninguém trocar a visibilidade na
 # mão, o `docker compose pull` de toda VPS é negado — e como `pull` de serviço
 # com `image:` falha a operação inteira, a instalação morre no passo de subir.
+#
+# ⚠️ O DONO E O REGISTRO SAEM DO `IMG_NS`, NUNCA DE UM LITERAL. Achado por
+# @galeonel no PR #605: as duas URLs abaixo tinham `melgarafael` cravado. Num
+# fork que troca o `IMG_NS`, isso faz o pré-voo conferir os pacotes do UPSTREAM
+# enquanto `gravar_imagens` escreve no `.env` do cliente as referências do FORK
+# — a sonda mede um caminho e o usuário usa outro, que é a falha-em-verde do
+# passe 5 da triagem.
+#
+# E o literal escapava da catraca por acidente: `namespace-das-imagens.test.ts`
+# procura a string contígua `ghcr.io/melgarafael`, e a URL do token a parte em
+# `ghcr.io/token?scope=repository:melgarafael/`.
 ghcr_status() {
-  local img="$1" tag="$2" tok
+  local img="$1" tag="$2" tok registry owner
+  registry="${IMG_NS%%/*}"
+  owner="${IMG_NS#*/}"
   tok="$(curl -fsS --max-time 6 \
-          "https://ghcr.io/token?scope=repository:melgarafael/${img}:pull&service=ghcr.io" 2>/dev/null \
+          "https://${registry}/token?scope=repository:${owner}/${img}:pull&service=${registry}" 2>/dev/null \
         | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
   if [ -z "$tok" ]; then printf '000'; return 0; fi
   curl -s -o /dev/null --max-time 6 -w '%{http_code}' \
     -H "Authorization: Bearer $tok" \
     -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json' \
-    "https://ghcr.io/v2/melgarafael/${img}/manifests/${tag}" 2>/dev/null || printf '000'
+    "https://${registry}/v2/${owner}/${img}/manifests/${tag}" 2>/dev/null || printf '000'
 }
 
 # As TRÊS imagens existem e são públicas nesta referência?
@@ -619,6 +649,45 @@ gravar_imagens() {
   set_env_var "$envfile" SCHEDULER_PULL_POLICY "$politica"
 }
 
+# ── Os segredos da chamada de voz, no .env de quem já tinha instalado ────────
+#
+# A doutrina de packaging é literal: "bump de versão não pode exigir que o
+# operador edite `.env`, compose ou qualquer arquivo à mão". A chamada de voz
+# (spec 18) trouxe três chaves novas, e o serviço NÃO SOBE sem duas delas.
+#
+# Quem instalou antes desta versão não as tem. Sem esta função, o dia em que ele
+# quisesse ligar a voz começaria por inventar dois segredos num editor de texto
+# dentro de uma VPS — que é exatamente o passo que a doutrina proíbe.
+#
+# LACUNA APENAS, como `completar_pin_ausente`: chave já presente (mesmo vazia
+# por escolha de quem operou) é intocável. Preencher só o que falta é a
+# diferença entre curar e sobrescrever.
+#
+# ⚠️ ISTO NÃO LIGA A FEATURE. As chaves geradas ficam paradas até alguém pôr
+# `voz` em COMPOSE_PROFILES: sem o profile, o compose nem cria o contêiner.
+# Gerar credencial para um serviço desligado não é risco — é o que faz o
+# desligado poder virar ligado sem passo manual.
+completar_segredos_da_voz() {  # completar_segredos_da_voz [envfile]
+  local envfile="${1:-.env}" criados="" chave
+  [ -f "$envfile" ] || return 0
+  # Somente-leitura (montagem read-only, permissão errada): não é erro daqui.
+  [ -w "$envfile" ] || return 0
+
+  for chave in WACALLS_ADMIN_USER WACALLS_ADMIN_PASSWORD WACALLS_API_TOKEN; do
+    # `^CHAVE=` casa inclusive a linha com valor vazio — que é presença, não
+    # lacuna. Só a AUSÊNCIA da linha é preenchida.
+    grep -qE "^${chave}=" "$envfile" && continue
+    if [ "$chave" = "WACALLS_ADMIN_USER" ]; then
+      set_env_var "$envfile" "$chave" "deskcomm"
+    else
+      set_env_var "$envfile" "$chave" "$(openssl rand -hex 32)"
+    fi
+    criados="$criados $chave"
+  done
+
+  printf '%s' "${criados# }"
+}
+
 # Grava (ou reescreve) uma chave no .env — sem duplicar linha se ela já existe.
 #   set_env_var .env APP_IMAGE ghcr.io/…:1.1.0
 #
@@ -641,12 +710,56 @@ set_env_var() {
 }
 
 # Resolve o UUID de um usuário pelo e-mail (admin API do Supabase).
+#
+# ── O `filter` do GoTrue é BUSCA POR SUBSTRING, não expressão ────────────────
+# Esta função pedia `?filter=email.eq.<email>` — sintaxe do PostgREST, que o
+# GoTrue não fala. Ele trata a string inteira como termo de busca, nenhum e-mail
+# contém "email.eq.", e a resposta é SEMPRE vazia. Medido em 2026-08-31 contra o
+# projeto de produção, com um e-mail que existe:
+#
+#   GET /auth/v1/admin/users?filter=email.eq.<existente>  → 200 {"users":[]}
+#   GET /auth/v1/admin/users?filter=<existente>           → 200 {"users":[<ele>]}
+#
+# Consequência: `reset-password.sh` morria com "Usuário '<email>' não
+# encontrado" para TODO e-mail — o único caminho de recuperação de senha de uma
+# instalação sem SMTP, que é o estado normal de um self-host, e o mesmo comando
+# que o CLAUDE.md do kit manda usar quando a pessoa se tranca fora.
+#
+# ── Por que o casamento tem de ser EXATO aqui ───────────────────────────────
+# Justamente por ser substring, `ana@empresa.com` casa também
+# `mariana@empresa.com`. Um `head -1` cego devolveria o UUID da outra pessoa
+# numa função cujo único consumidor TROCA SENHA. O padrão abaixo ancora no
+# prefixo do objeto de usuário (id→aud→role→email, nessa ordem), que nenhum
+# objeto aninhado de `identities` tem — e exige o e-mail inteiro, com os pontos
+# escapados (em BRE `.` casa qualquer caractere, e sem escapar
+# `elias.gervanno@x` casaria `eliasXgervanno@x`).
+#
+# Falha FECHADA: se o GoTrue mudar a ordem dos campos, o padrão não casa e a
+# função devolve vazio — quem chama morre com "não encontrado", que é ruim mas
+# recuperável. Devolver o UUID errado, não.
+#
+# ── Por que o `|| return 0` do fim não é enfeite ────────────────────────────
+# `_common.sh` roda sob `set -euo pipefail`, e o consumidor resolve o UUID numa
+# ATRIBUIÇÃO: `uid="$(owner_id_by_email "$EMAIL")"`. O status da atribuição é o
+# da substituição, então uma função que devolve não-zero mata o script ALI — na
+# linha de cima do `[ -n "$uid" ] || die "Usuário não encontrado."`, que nunca
+# chega a rodar. E o `grep` devolve 1 justamente quando não casa ninguém, que é
+# o caso em que a mensagem existe para falar.
+#
+# Medido em 2026-09-03 contra o GoTrue local v2.188.1, e-mail inexistente, as
+# duas linhas reais do reset-password.sh: rc=1 e NENHUMA saída — o operador que
+# erra uma letra no endereço não vê aviso nenhum, só o prompt de volta. "Não
+# encontrado" era uma mensagem inalcançável. O `|| return 0` põe a decisão onde
+# ela pertence: a função devolve VAZIO, e quem chama decide o que dizer.
 owner_id_by_email() {
-  local email="$1"
-  curl -fsS "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users?filter=email.eq.${email}" \
+  local email="$1" resp esc
+  resp="$(curl -fsS "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users?filter=${email}" \
     -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-    -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" 2>/dev/null \
-    | grep -o '"id":"[0-9a-f-]\{36\}"' | head -1 | sed 's/.*:"//;s/"//'
+    -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" 2>/dev/null)" || return 0
+  esc="$(printf '%s' "$email" | sed 's/[.[\*^$]/\\&/g')"
+  printf '%s' "$resp" \
+    | grep -o "\"id\":\"[0-9a-f-]\{36\}\",\"aud\":\"[^\"]*\",\"role\":\"[^\"]*\",\"email\":\"${esc}\"" \
+    | head -1 | sed 's/^"id":"//;s/".*//' || return 0
 }
 
 # Ativa (idempotente) o cron que dispara o drain de eventos a cada minuto. SEM
@@ -699,7 +812,39 @@ setup_event_log_drain_cron() {
   if crontab -l 2>/dev/null | grep -qF -e "$url_drain"; then first_time=0; fi
 
   local cron_line="* * * * * curl -fsS -H \"Authorization: Bearer ${secret}\" \"${url_drain}\" >/dev/null 2>&1 ${marcador}"
-  ( crontab -l 2>/dev/null | cron_merge "$marcador" "$url_drain" "$cron_line" ) | crontab -
+  # ⚠️ `|| true` OBRIGATÓRIO, e não é defensividade: `crontab -l` sai com status
+  # 1 (sem stdout, só um aviso no stderr) quando o usuário NUNCA teve crontab —
+  # o caso NORMAL de uma VPS recém-provisionada, que é o caso normal de quem
+  # instala este produto. Sob `set -o pipefail` (linha 3 deste arquivo, e
+  # `install.sh:12`) esse 1 vaza pelo pipe mesmo com os estágios seguintes
+  # bem-sucedidos — `false | true` também sai 1 —, e o `set -e` mata o
+  # instalador AQUI, no bloco 11, DEPOIS de a linha do cron já ter sido gravada.
+  # O dono vê o script morrer sem mensagem, numa instalação que na verdade
+  # funcionou.
+  #
+  # ACHADO DUAS VEZES, POR DUAS PESSOAS QUE NÃO SE FALARAM, NO MESMO DIA:
+  # @luiscgc91 (PR #683) e @rafaelbatistazz (issue #715 + PR #726), os dois
+  # instalando numa VPS limpa. Os dois escreveram EXATAMENTE a mesma linha. Isso
+  # não é redundância — é a medida de quanto o defeito doía, e a razão de este
+  # comentário ser longo: ele existe para a terceira pessoa não precisar
+  # descobrir de novo.
+  #
+  # A issue #715 descreve o sintoma como quem o viveu: o instalador para logo
+  # depois de "✓ chave de cifra ativa no banco", cai na tela "A instalação
+  # parou", e os contêineres estão SAUDÁVEIS. Rodar de novo passa — porque aí o
+  # crontab já não está vazio, o que faz o defeito parecer fantasma.
+  #
+  # Reproduzido com um dublê de `crontab` que sai 1 no `-l`: sem o `|| true`, a
+  # linha seguinte a este bloco nunca é alcançada. Vigiado por DOIS testes, de
+  # propósito: `tests/shell/cron-sem-crontab-previo.test.sh` mede cada função
+  # isolada, e o bloco `cron numa VPS sem crontab nenhum` de
+  # `hostgator-setup-kit/test-validators.sh` (de @rafaelbatistazz) roda AS DUAS
+  # no mesmo processo — como o `install.sh` faz — e confere que as duas linhas
+  # foram gravadas.
+  #
+  # Stdin vazio para o `cron_merge` é exatamente o que "sem crontab prévio" deve
+  # produzir — o comportamento não muda, só o status.
+  ( { crontab -l 2>/dev/null || true; } | cron_merge "$marcador" "$url_drain" "$cron_line" ) | crontab -
   c_grn "✓ automações ativas (cron do event-log-drain, a cada minuto)"
 
   if [ "$first_time" = 1 ]; then
@@ -738,7 +883,9 @@ setup_update_agent_cron() {
   local legado="cd ${PROJECT_DIR} && bash hostgator-setup-kit/agent.sh"
   local marcador; marcador="$(cron_tag agent)"
   local cron_line="*/5 * * * * ${legado} >/dev/null 2>&1 ${marcador}"
-  ( crontab -l 2>/dev/null | cron_merge "$marcador" "$legado" "$cron_line" ) | crontab -
+  # Mesmo motivo do drain acima, e é por isso que o conserto é nos DOIS: a
+  # primeira instalação passa pelos dois blocos na mesma rodada.
+  ( { crontab -l 2>/dev/null || true; } | cron_merge "$marcador" "$legado" "$cron_line" ) | crontab -
   c_grn "✓ atualização pela tela ativa (agente a cada 5 minutos)"
 }
 

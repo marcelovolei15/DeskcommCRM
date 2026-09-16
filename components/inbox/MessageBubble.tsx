@@ -22,6 +22,17 @@ interface Props {
   onResponder?: (m: Message) => void;
   /** A mensagem citada por ESTA, quando houver — desenha o fio. */
   citada?: Message | null;
+  /**
+   * QUEM está lendo a conversa. É o que separa "Você" de "Atendente": a coluna
+   * `sent_via='user'` só diz *"um humano digitou no CRM"*, nunca QUAL humano.
+   *
+   * Sem este id, uma organização com dois atendentes mostrava "Você" nas
+   * mensagens do colega — cada um lia o atendimento do outro como se fosse o
+   * seu. Por isso a ausência do id NÃO cai em "Você": quem não sabe quem está
+   * lendo (a leitura do super-admin em `AdminThread`, por exemplo) rotula
+   * "Atendente", que é verdadeiro para todo mundo.
+   */
+  viewerUserId?: string | null;
 }
 
 function AckIndicator({ status, t }: { status: string; t: (texto: string) => string }) {
@@ -37,7 +48,13 @@ function AckIndicator({ status, t }: { status: string; t: (texto: string) => str
   return null;
 }
 
-export function MessageBubble({ message, debugCitations, onResponder, citada }: Props) {
+export function MessageBubble({
+  message,
+  debugCitations,
+  onResponder,
+  citada,
+  viewerUserId,
+}: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
   const isOutbound = message.direction === "outbound";
@@ -57,9 +74,35 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
   const citations = extractCitations(message.metadata);
   const showCitationButton =
     isOutbound && aiGenerated && (debugCitations ?? false);
+  // De quem saiu esta linha. `external_device` é a resposta pelo CELULAR — o
+  // operador atendeu pelo WhatsApp do telefone, fora do CRM, e o ingest carimba
+  // aqui. Antes isto voltava null para tudo que não fosse IA, e a bolha ficava
+  // sem nome: o dono lia a conversa como se tudo tivesse sido digitado no CRM.
+  // Os rótulos passam por t() no render (ver dicionario.ts para o espanhol).
+  //
+  // NÃO HÁ RAMO PARA `'automation'`. O CHECK do banco aceita o valor e o union
+  // de `Message` o declara, mas nenhuma linha de app/, lib/ ou workers/ o
+  // grava: as ações de automação chamam `sendMessageHandler` com
+  // `actor.type === "webhook_source"`, e `_handler.ts` carimba `'ai'` em tudo
+  // que não é `"user"`. Um ramo aqui seria controle decorativo — a tela
+  // prometendo uma distinção que o motor não faz. Carimbar `'automation'` na
+  // origem é decisão de produto com efeito colateral medido (o dedup de eco da
+  // ingestão de canal filtra `sent_via in ('ai','user')`, e o valor novo
+  // duplicaria a mensagem na conversa), então fica para uma issue própria.
+  // Vigiado nas duas direções por tests/unit/rotulo-de-origem-tem-emissor.
   const senderLabel = (() => {
     if (!isOutbound) return null;
     if (message.sent_via === "ai") return "IA";
+    if (message.sent_via === "external_device") return "Celular";
+    if (message.sent_via === "user" || message.sent_via === "crm") {
+      // "Você" exige as DUAS pontas: saber quem lê e saber quem enviou. Falta
+      // qualquer uma, o rótulo cai para "Atendente" — que continua dizendo o
+      // que `sent_via` de fato garante (um humano, pelo CRM) sem afirmar uma
+      // identidade que o dado não sustenta.
+      return viewerUserId != null && message.sent_by_user_id === viewerUserId
+        ? "Você"
+        : "Atendente";
+    }
     return null;
   })();
 
@@ -86,7 +129,7 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
           onClick={() => onResponder(message)}
           aria-label={t("Responder a esta mensagem")}
           className={cn(
-            "rounded p-1 text-muted-foreground transition-opacity hover:bg-muted",
+            "rounded-md p-1 text-muted-foreground transition-opacity hover:bg-muted",
             // VISÍVEL POR PADRÃO, e escondido só onde EXISTE hover.
             //
             // A primeira versão era `opacity-0` + `group-hover`, copiando o
@@ -128,7 +171,7 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
         {citada && (
           <div
             className={cn(
-              "mb-1 rounded border-l-2 px-2 py-1 text-xs",
+              "mb-1 rounded-md border-l-2 px-2 py-1 text-xs",
               isOutbound
                 ? "border-primary-foreground/50 bg-primary-foreground/10"
                 : "border-primary bg-background/60",
@@ -155,7 +198,7 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
           </div>
         )}
         {senderLabel && (
-          <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide opacity-80">
+          <div className="mb-0.5 flex items-center gap-1 text-[11px] font-semibold opacity-80">
             {senderLabel === "IA" ? (
               <Robot size={10} weight="duotone" aria-hidden />
             ) : null}
@@ -193,7 +236,7 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
         <div
           className={cn(
             "mt-1 flex items-center justify-end gap-1 text-[10px]",
-            isOutbound ? "text-primary-foreground/70" : "text-muted-foreground",
+            isOutbound ? "text-primary-foreground" : "text-muted-foreground",
           )}
         >
           {editada && (
@@ -220,7 +263,7 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {message.error_message ?? message.error_code ?? t("Erro desconhecido")}
+                  {message.error_message ? t(message.error_message) : (message.error_code ?? t("Erro desconhecido"))}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -233,7 +276,7 @@ export function MessageBubble({ message, debugCitations, onResponder, citada }: 
           onClick={() => onResponder(message)}
           aria-label={t("Responder a esta mensagem")}
           className={cn(
-            "rounded p-1 text-muted-foreground transition-opacity hover:bg-muted",
+            "rounded-md p-1 text-muted-foreground transition-opacity hover:bg-muted",
             // VISÍVEL POR PADRÃO, e escondido só onde EXISTE hover.
             //
             // A primeira versão era `opacity-0` + `group-hover`, copiando o

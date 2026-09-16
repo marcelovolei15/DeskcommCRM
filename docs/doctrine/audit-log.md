@@ -13,24 +13,31 @@ quando houve efeito*, nunca *parar de auditar* — as duas direções são medid
 por `tests/unit/cron-audita-so-quando-ha-efeito.test.ts`, que varre o AST de
 **toda** rota de `app/api/v1/cron/`.
 
-## Append-only é do schema, com uma ressalva
+## Append-only é do schema — e desde a 0258, sem ressalva de TRUNCATE
 
-Nenhum papel tem GRANT de UPDATE/DELETE em `api_audit_log` — **nem
-`service_role`**. Para conferir na fonte:
+**⚠️ Este item mudou de fato depois de escrito.** Até a migration 0258, o
+`TRUNCATE` ficava concedido a `anon`/`authenticated`/`service_role` como
+resíduo do default ACL do Supabase pra tabelas em `public` (todo projeto novo
+nasce com `GRANT ALL` desses três papéis, e o dump só *acrescenta* — nunca
+revoga). Isso era real e alcançável pela service key (que ignora RLS), mesmo
+sem a REST emitir `TRUNCATE`. A 0258 revoga explicitamente `UPDATE`, `DELETE`
+e `TRUNCATE` de `anon`/`authenticated`/`service_role` em `api_audit_log`. Pra
+conferir o estado atual na fonte:
 
 ```bash
 psql "$SUPABASE_DB_URL" -c "select grantee, privilege_type from information_schema.role_table_grants
-  where table_name='api_audit_log' and privilege_type in ('DELETE','UPDATE','TRUNCATE');"
+  where table_schema='public' and table_name='api_audit_log'
+    and privilege_type in ('DELETE','UPDATE','TRUNCATE')
+    and grantee in ('anon','authenticated','service_role','PUBLIC');"
 ```
 
-**`TRUNCATE` entra na consulta de propósito, e o resultado não é vazio.** Ele
-está concedido a `anon`, `authenticated` e `service_role` — resíduo de o dump
-enumerar os privilégios desta tabela (as demais recebem `GRANT ALL`, e quem as
-protege é a RLS). Uma sonda que pergunte só por `DELETE`/`UPDATE` devolve zero
-linhas e deixa quem leu concluindo que a tabela não pode ser esvaziada, quando
-o privilégio que a esvazia INTEIRA está lá. Não é alcançável pela REST (o
-PostgREST não emite `TRUNCATE`), então não é buraco de superfície — mas a
-frase "append-only é do schema" só é inteira com esta ressalva escrita.
+O resultado esperado agora é **vazio** (sem o filtro de `grantee`, aparecem as
+linhas do dono `postgres` — não são defeito). Quem mede isso sob o default ACL
+real do Supabase, não sob um Postgres de teste que já nasce sem o problema, é
+`tests/invariants/audit-log-sob-o-default-acl-do-supabase.test.ts`. **A lição
+que sobrevive ao conserto:** enumerar privilégio no dump não protege tabela
+nenhuma no Supabase real — o que protege é `revoke` explícito no apêndice do
+`baseline.sql`.
 
 ## Retenção: 5 anos default, e agora EXECUTADA
 

@@ -328,6 +328,138 @@ describe("GET /api/v1/system/version", () => {
     expect(body.data.current_version).toBe("1.0.0");
   });
 
+  it("um rollback que já foi SUPERADO por um deploy posterior não decide mais a versão", async () => {
+    // Medido em produção: um run `failed_rolled_back` de 28/08 fazia o rodapé
+    // anunciar `3414a2df` em 05/09, oito dias e vários deploys depois. A
+    // heurística de rollback estava certa — ela existe porque, no instante da
+    // falha, o checkout do host já é a versão nova e o contêiner voltou para a
+    // velha — mas não tinha fim de validade, e o app troca por caminhos que não
+    // criam run nenhum (`docker compose up -d`, deploy por CI, `update.sh` no
+    // terminal). O desempate é temporal: se o agente do host gravou
+    // `system_version` DEPOIS de o run terminar, ele viu o mundo mais recente.
+    versionRow.current_version = "1.2.0";
+    versionRow.updated_at = "2026-09-05T15:35:02.000Z";
+    runRow = {
+      id: "66666666-6666-4666-8666-666666666666",
+      status: "failed_rolled_back",
+      last_step: "banco",
+      dispatched_at: "2026-08-28T01:47:53.000Z",
+      finished_at: "2026-08-28T01:51:52.000Z",
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.current_version).toBe("1.2.0");
+    // O run continua na resposta: ele é o diagnóstico daquela falha, e some da
+    // tela só quando alguém tenta atualizar de novo. O que ele deixa de fazer é
+    // NOMEAR a versão no ar.
+    expect(body.data.run.from_version).toBe("1.0.0");
+  });
+
+  it("terminou BEM e o host ainda não bateu: a tela já sabe, e o botão some", async () => {
+    // O defeito: `run_result` com sucesso fecha o run e NÃO toca
+    // `current_version` — quem escreve essa coluna é o heartbeat do host, de 5
+    // em 5 minutos. Nessa janela `latest !== current` continuava verdadeiro e a
+    // tela voltava do reinício oferecendo "Atualizar agora" para a versão que
+    // acabou de ser instalada. Quem clicou fazia tudo de novo.
+    versionRow.current_version = "1.0.0";
+    versionRow.latest_version = "1.1.0";
+    versionRow.updated_at = "2026-09-11T13:55:00.000Z";
+    runRow = {
+      id: "77777777-7777-4777-8777-777777777777",
+      status: "success",
+      last_step: "banco",
+      dispatched_at: "2026-09-11T13:58:00.000Z",
+      finished_at: "2026-09-11T14:00:00.000Z",
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.current_version).toBe("1.1.0");
+    expect(
+      body.data.update_available,
+      "a tela voltaria oferecendo a versão que acabou de ser instalada",
+    ).toBe(false);
+    expect(body.data.just_updated).toBe(true);
+  });
+
+  it("o host confirmou: a janela se fecha sozinha, sem ninguém limpar nada", async () => {
+    // O fim de validade. Depois da batida, quem manda volta a ser o host —
+    // senão um run de sucesso nomearia a versão no ar para sempre, que é
+    // exatamente o defeito que o `rollbackFoiSuperado` já pagou uma vez.
+    versionRow.current_version = "1.1.0";
+    versionRow.latest_version = "1.1.0";
+    versionRow.updated_at = "2026-09-11T14:05:00.000Z";
+    runRow = {
+      id: "77777777-7777-4777-8777-777777777777",
+      status: "success",
+      last_step: "banco",
+      dispatched_at: "2026-09-11T13:58:00.000Z",
+      finished_at: "2026-09-11T14:00:00.000Z",
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.current_version).toBe("1.1.0");
+    expect(body.data.just_updated).toBe(false);
+  });
+
+  it("o pedido em espera carrega `dispatched_at` — é o relógio da tela", async () => {
+    // Entre o clique e o agente pegar o pedido passam até 5 minutos, e nesse
+    // tempo `last_step` é nulo: a tela mostrava quatro círculos vazios, imóveis,
+    // sem nada que distinguisse "esperando" de "travou". Sem esta data não há
+    // como contar o tempo — e recarregar a página não pode zerar a conta, então
+    // ela vem do servidor, nunca de quando a aba abriu.
+    runRow = {
+      id: "88888888-8888-4888-8888-888888888888",
+      status: "dispatched",
+      last_step: null,
+      dispatched_at: "2026-09-11T13:58:00.000Z",
+      finished_at: null,
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.run.dispatched_at).toBe("2026-09-11T13:58:00.000Z");
+    expect(body.data.run.last_step).toBeNull();
+    expect(body.data.just_updated).toBe(false);
+  });
+
+  it("sem `finished_at`, o run velho ainda decide — ausência de prova não é prova de deploy", async () => {
+    // A guarda acima só pode agir quando existe o par de datas. Um run gravado
+    // por uma versão antiga do agente não tem `finished_at`, e aí o
+    // comportamento anterior é o seguro: o rollback é a informação mais
+    // específica que a instalação tem sobre o que está no ar.
+    versionRow.current_version = "1.1.0";
+    versionRow.updated_at = "2026-09-05T15:35:02.000Z";
+    runRow = {
+      id: "77777777-7777-4777-8777-777777777777",
+      status: "failed_rolled_back",
+      last_step: "banco",
+      dispatched_at: "2026-08-28T01:47:53.000Z",
+      finished_at: null,
+      from_version: "1.0.0",
+      to_version: "1.1.0",
+      log_tail: "",
+    };
+    vi.mocked(loadAuthUser).mockResolvedValue(OWNER as never);
+    const { GET } = await import("../version/route");
+    const body = await (await GET(get())).json();
+    expect(body.data.current_version).toBe("1.0.0");
+  });
+
   it("deriva unknown num run parado há muito tempo", async () => {
     runRow = {
       id: "55555555-5555-4555-8555-555555555555",

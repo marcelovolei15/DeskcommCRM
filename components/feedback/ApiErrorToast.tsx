@@ -69,6 +69,9 @@ const COPY: Record<string, { variant: Variant; msg?: string }> = {
     variant: "warning",
     msg: "Calma — muitas tentativas. Espere alguns segundos.",
   },
+  // Sem `msg`: a rota diz o que fazer (esperar, ou reparear), e o tom é de
+  // espera, não de quebra — o número continua pareado.
+  wacalls_not_connected: { variant: "warning" },
   lgpd_anonymization_irreversible: {
     variant: "error",
     msg: "Esta ação não pode ser desfeita: o contato já foi anonimizado.",

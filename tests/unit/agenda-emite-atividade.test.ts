@@ -144,6 +144,7 @@ function coletaOk(): ResultadoDaConsulta {
     fusoSuposto: false,
     fontesDefasadas: [],
     agendaExternaNuncaLida: false,
+    googleCoberturaParcial: false,
   };
 }
 
@@ -167,13 +168,18 @@ function dadoDaTabela(tabela: string): unknown {
 function cliente(): SupabaseClient {
   const leitura = (tabela: string) => {
     const cadeia: Record<string, unknown> = {};
-    for (const m of ["eq", "neq", "in", "is", "not", "or", "gte", "lte", "order", "limit"]) {
+    for (const m of ["eq", "neq", "in", "is", "not", "or", "gte", "lte", "lt", "gt", "order", "limit"]) {
       cadeia[m] = () => cadeia;
     }
     const resposta = () => ({ data: dadoDaTabela(tabela), error: null });
     cadeia.maybeSingle = async () => resposta();
     cadeia.single = async () => resposta();
-    cadeia.then = (r: (v: unknown) => unknown) => r(resposta());
+    // Leitura em LISTA de `calendar_appointments` é a ocupação que o encaixe de
+    // uma pessoa confere (`coletaOQueOcupa`) — e lista é array, nunca a linha
+    // solta que `maybeSingle` devolve. Agenda vazia: este arquivo não é sobre
+    // sobreposição (essa mora em `pessoa-marca-fora-da-grade.test.ts`).
+    cadeia.then = (r: (v: unknown) => unknown) =>
+      r(tabela === "calendar_appointments" ? { data: [], error: null } : resposta());
     return cadeia;
   };
 
@@ -204,6 +210,10 @@ function cliente(): SupabaseClient {
     }),
     rpc: async (fn: string, args: Linha) => {
       banco.rpc.push({ fn, args });
+      if(fn==="fn_appointment_change") {
+        expect(args.p_org).toBe(ORG);expect(args.p_id).toBe(AGENDAMENTO);
+        return {data:{...banco.agendamento,...args.p_patch as Linha,revision:2},error:null};
+      }
       return { data: null, error: null };
     },
   } as unknown as SupabaseClient;

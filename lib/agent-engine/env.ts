@@ -80,6 +80,12 @@ const envSchema = z.object({
   WATCHDOG_REDRIVE_MIN_AGE_MS: z.coerce.number().int().positive().default(30_000),
   WATCHDOG_REDRIVE_BATCH_SIZE: z.coerce.number().int().positive().default(10),
   WATCHDOG_REDRIVE_SPACING_MS: z.coerce.number().int().positive().default(4_000),
+  // Ponte de eventos WaCalls (spec 18) — chamada de voz, opt-in por org. Sem
+  // WACALLS_API_BASE_URL a ponte fica OFF (warn), mesmo princípio do watchdog
+  // WAHA acima.
+  WACALLS_API_BASE_URL: z.string().url().optional(),
+  WACALLS_API_TOKEN: z.string().trim().min(1).optional(),
+  WACALLS_BRIDGE_MAX_BACKOFF_MS: z.coerce.number().int().positive().default(30_000),
   // Dono ÚNICO dos eventos ai_agent.dispatch_requested (mesma chave do app):
   // 'engine' (default) = o drain deste worker consome; 'native' = o dispatcher
   // EPIC-13 consome e o drain daqui NÃO liga. Nunca os dois.
@@ -198,6 +204,12 @@ const envSchema = z.object({
   FLYWHEEL_BATCH_LIMIT: z.coerce.number().int().positive().default(10),
   // Contenção de egress — hosts EXTRA além do Supabase/WAHA (CSV). Fail-closed.
   EGRESS_EXTRA_ALLOWED_HOSTS: z.string().optional(),
+  // Elegibilidade da IA (gate opt-in `channel_sessions.metadata.ai_gate=allowlist`):
+  // janela de validade da autorização de um contato. Fora dela, submissão antiga
+  // não reativa a IA; o turno autorizado renova o carimbo enquanto a conversa
+  // está viva. Só tem efeito nos canais com o gate ligado — canal 'open' (o
+  // default) nunca consulta autorização.
+  AI_ALLOWLIST_TTL_DAYS: z.coerce.number().int().positive().default(21),
 });
 
 export type Env = z.infer<typeof envSchema>;

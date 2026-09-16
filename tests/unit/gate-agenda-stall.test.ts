@@ -55,7 +55,7 @@ const FRASE_MEDIDA_2 =
 describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade", () => {
   it("veta a frase medida em produção quando armado e a ferramenta não rodou", () => {
     const v = agendaStallGate.evaluate(
-      baseCtx({ agenda: { active: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_1 }),
+      baseCtx({ agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_1 }),
     );
     expect(v.pass).toBe(false);
     if (v.pass) throw new Error("inalcançável");
@@ -64,7 +64,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
 
   it("veta a segunda frase medida (deferência 'com a equipe')", () => {
     const v = agendaStallGate.evaluate(
-      baseCtx({ agenda: { active: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_2 }),
+      baseCtx({ agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_2 }),
     );
     expect(v.pass).toBe(false);
   });
@@ -76,14 +76,14 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
 
   it("agente sem crm_book_appointment (active: false) é no-op mesmo com a frase", () => {
     const v = agendaStallGate.evaluate(
-      baseCtx({ agenda: { active: false, toolCalledThisTurn: false }, body: FRASE_MEDIDA_1 }),
+      baseCtx({ agenda: { active: false, podeMarcar: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_1 }),
     );
     expect(v.pass).toBe(true);
   });
 
   it("a ferramenta JÁ rodou neste turno: a MESMA frase passa — checou de verdade", () => {
     const v = agendaStallGate.evaluate(
-      baseCtx({ agenda: { active: true, toolCalledThisTurn: true }, body: FRASE_MEDIDA_1 }),
+      baseCtx({ agenda: { active: true, podeMarcar: true, toolCalledThisTurn: true }, body: FRASE_MEDIDA_1 }),
     );
     expect(v.pass).toBe(true);
   });
@@ -93,7 +93,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
     // lead pedir confirmação. Não é "vou verificar/confirmar": não deve ser vetada.
     const v = agendaStallGate.evaluate(
       baseCtx({
-        agenda: { active: true, toolCalledThisTurn: false },
+        agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false },
         body: "Amanhã, a oficina abre às 9h. Posso agendar a avaliação para esse horário.",
       }),
     );
@@ -103,7 +103,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
   it("'vou verificar' fora de contexto de agenda (outro assunto) passa — o padrão exige substantivo de agenda por perto", () => {
     const v = agendaStallGate.evaluate(
       baseCtx({
-        agenda: { active: true, toolCalledThisTurn: false },
+        agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false },
         body: "Vou verificar o seu endereço de entrega e já te retorno.",
       }),
     );
@@ -117,7 +117,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
   it("veta confirmação categórica sem checar de verdade ('está confirmado')", () => {
     const v = agendaStallGate.evaluate(
       baseCtx({
-        agenda: { active: true, toolCalledThisTurn: false },
+        agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false },
         body: "Perfeito, Cristiano! 😊 Seu agendamento está confirmado para amanhã às 9h.",
       }),
     );
@@ -130,7 +130,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
   it("veta a variante 'está certinho' (segunda frase medida do mesmo incidente)", () => {
     const v = agendaStallGate.evaluate(
       baseCtx({
-        agenda: { active: true, toolCalledThisTurn: false },
+        agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false },
         body: "Confirmando: seu agendamento está certinho para amanhã às 9h.",
       }),
     );
@@ -140,7 +140,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
   it("confirmação categórica passa quando a ferramenta JÁ rodou neste turno", () => {
     const v = agendaStallGate.evaluate(
       baseCtx({
-        agenda: { active: true, toolCalledThisTurn: true },
+        agenda: { active: true, podeMarcar: true, toolCalledThisTurn: true },
         body: "Seu agendamento está confirmado para amanhã às 9h.",
       }),
     );
@@ -150,7 +150,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
   it("'o agendamento está uma bagunça' (sem particípio de confirmação) não é falso positivo", () => {
     const v = agendaStallGate.evaluate(
       baseCtx({
-        agenda: { active: true, toolCalledThisTurn: false },
+        agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false },
         body: "O agendamento está uma bagunça esse mês, mas isso é outro assunto.",
       }),
     );
@@ -159,7 +159,7 @@ describe("agendaStallGate — veta a promessa vazia, nunca a checagem de verdade
 
   it("a razão do veto nomeia as três ferramentas — o modelo precisa saber QUAL chamar", () => {
     const v = agendaStallGate.evaluate(
-      baseCtx({ agenda: { active: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_1 }),
+      baseCtx({ agenda: { active: true, podeMarcar: true, toolCalledThisTurn: false }, body: FRASE_MEDIDA_1 }),
     );
     if (v.pass) throw new Error("inalcançável");
     expect(v.reason).toContain("crm_find_free_slots");

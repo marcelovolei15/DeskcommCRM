@@ -20,7 +20,7 @@ DeskcommCRM é um sistema operacional de vendas open source com agentes de IA na
 
 ## Stack canônica
 
-- **Frontend:** Next.js 16 App Router (Turbopack) + React 19 + TypeScript 6 estrito + Tailwind + shadcn/ui (style: `new-york`, neutral)
+- **Frontend:** Next.js 16 App Router (Turbopack) + React 19 + TypeScript 6 estrito + Tailwind 4 (config em CSS — ver abaixo) + shadcn/ui (style: `new-york`, neutral)
 - **Backend:** Next.js Route Handlers (mesmo repo); workers via `event_log` table + cron
 - **DB:** Supabase (Postgres). RLS em toda tabela tenant-aware. Extensions: `uuid-ossp`, `pgcrypto`, `vector`
 - **Auth:** Supabase Auth via `@supabase/ssr`. Cookie SameSite=Strict, HttpOnly, Secure
@@ -71,9 +71,46 @@ DeskcommCRM é um sistema operacional de vendas open source com agentes de IA na
 
 ### Audit log
 - Toda mutação POST/PATCH/DELETE bem-sucedida → 1 entrada em `api_audit_log` (fire-and-forget, p99 ≤500ms)
-- **Rodada de cron que não fez nada NÃO é mutação e não audita** — a que fez, audita. Vigiado por `tests/unit/cron-audita-so-quando-ha-efeito.test.ts`
-- Append-only por schema, não por prosa — nenhum papel (nem `service_role`) tem GRANT de UPDATE/DELETE em `api_audit_log`. **Mas tem `TRUNCATE` concedido** a `anon`/`authenticated`/`service_role` (resíduo do dump) — não alcançável pela REST, mas real. Ver ressalva completa e comando de conferência em [`docs/doctrine/audit-log.md`](docs/doctrine/audit-log.md)
-- Retenção: 5 anos default, configurável (`AUDIT_LOG_RETENTION_DAYS`), expurgo real via `fn_expurgar_auditoria_vencida` (piso de 90 dias no corpo, cron diário). Sem camada cold/S3 — não existe. Racional completo em [`docs/doctrine/audit-log.md`](docs/doctrine/audit-log.md)
+- **Rodada de cron que não fez nada NÃO é mutação e não audita** — e a que fez, audita. `routing-worker` (1×/min) e `attendant-heartbeat` (1×/5min) auditavam incondicionalmente: ~51.840 linhas/mês numa instalação que não atende ninguém, e numa VPS real **95% do audit log** era batida de cron vazia (`docs/testing/user-journey-map.md`, achado 17). A guarda certa é *auditar quando houve efeito*, nunca *parar de auditar* — as duas direções são medidas por `tests/unit/cron-audita-so-quando-ha-efeito.test.ts`, que varre o AST de **toda** rota de `app/api/v1/cron/`
+- Audit é append-only para os papéis do PostgREST, e isso é do SCHEMA e não da prosa: `anon`, `authenticated` e `service_role` não têm GRANT de UPDATE, DELETE **nem TRUNCATE** em `api_audit_log` — **nem `service_role`** (migration 0258). O dono (`postgres`) pode tudo, como em qualquer tabela: a garantia é sobre os papéis que o PostgREST assume, nunca absoluta. Para conferir na fonte em vez de acreditar nesta linha:
+
+  ```bash
+  psql "$SUPABASE_DB_URL" -c "select grantee, privilege_type from information_schema.role_table_grants
+    where table_schema='public' and table_name='api_audit_log'
+      and privilege_type in ('DELETE','UPDATE','TRUNCATE')
+      and grantee in ('anon','authenticated','service_role','PUBLIC');"
+  ```
+
+  O resultado esperado é **vazio**. Sem o filtro de `grantee` aparecem as linhas
+  do dono `postgres` — e elas não são defeito. Racional completo em [`docs/doctrine/audit-log.md`](docs/doctrine/audit-log.md).
+
+  **Até a 0258 a primeira frase deste item era falsa no Supabase real, com o
+  gate verde.** Todo projeto Supabase nasce com um default ACL de TABELAS em
+  `public` que concede tudo aos três papéis — confira com
+  `select defaclacl from pg_default_acl where defaclobjtype = 'r' and defaclnamespace = 'public'::regnamespace;`
+  —, e o `GRANT` enumerado que o dump emite para esta tabela só ACRESCENTA, não
+  retira. Com a service key, que ignora RLS, uma linha escolhida da auditoria
+  era apagada ou reescrita pela REST; `anon`/`authenticated` só não o faziam
+  porque a RLS não tem policy de UPDATE/DELETE.
+
+  **A lição que sobrevive ao conserto é sobre a régua, não sobre o grant.** A
+  sonda de `tests/invariants/retencao-poda-e-expurgo.test.ts` ficou verde duas
+  vezes medindo o universo errado: primeiro perguntando só por DELETE/UPDATE com
+  TRUNCATE concedido ao lado; depois perguntando pelos três num Postgres onde o
+  prelude de `scripts/test-db.sh` reproduz o default ACL do Supabase para
+  FUNÇÕES e não para TABELAS — um banco onde o defeito não pode existir. Quem
+  mede o Supabase real é
+  `tests/invariants/audit-log-sob-o-default-acl-do-supabase.test.ts`: concede o
+  default ACL à tabela, reaplica o bloco da 0258 extraído do baseline e só então
+  sonda. **Enumerar privilégios no dump não protege tabela nenhuma no Supabase
+  real**; o que protege é `revoke` explícito no apêndice. Quais tabelas o dump
+  enumera em vez de `GRANT ALL`:
+
+  ```bash
+  grep -nE '^GRANT [A-Z,]+ ON TABLE' supabase/baseline.sql | grep -v 'GRANT ALL'
+  ```
+- **Retenção default de 5 anos, configurável, e agora EXECUTADA.** O expurgo é `public.fn_expurgar_auditoria_vencida` (`security definer`, **piso de 90 dias dentro do corpo**, revogada de anon/authenticated), chamada em lotes pelo cron `app/api/v1/cron/data-retention` (diário). O knob é `AUDIT_LOG_RETENTION_DAYS`. **Não há camada cold/S3** — o "hot 90 dias, cold (S3) o resto" que este arquivo afirmava por meses nunca existiu em código (auditoria de 2026-08-14: zero ocorrência de arquivamento), e um self-host não tem para onde arquivar: o Storage do cliente é a MESMA cota de 1 GB, já dividida com `whatsapp-media`. Para ver o que está em vigor: `grep -n "RETENCAO_AUDITORIA_DIAS" lib/retencao/politica.ts`
+- Por que uma `security definer` de expurgo não é porta de adulteração (o argumento inteiro está no cabeçalho da migration 0167): ela **não tem seletor de linha** — nenhum parâmetro de org, ator, ação ou id, e o único predicado é `created_at < now() - N dias`; o piso mora **no corpo**, não em quem chama; não é alcançável pela REST; é, desde a 0258, o **único** apagamento de auditoria ao alcance da service key — e não escolhe linha, só alcança a ponta mais velha que o piso; e **registra a própria erosão** (`retention.sweep_run`, com a contagem, numa linha nova demais para a chamada seguinte alcançar)
 - Falha de write em audit gera alerta Sentry, não bloqueia mutação principal
 
 ### LGPD
@@ -84,7 +121,7 @@ DeskcommCRM é um sistema operacional de vendas open source com agentes de IA na
 - Action audit obrigatória: `lgpd.data_request_received`, `lgpd.export_generated`, `lgpd.redact_executed`, `lgpd.consent_changed`
 
 ### WAHA
-- Plus obrigatório (Core não suporta multi-tenant, sem retry, sem S3)
+- Default fixo `devlikeapro/waha:latest-2026.7.2`, NOWEB. A prova local criou duas sessões CORE simultâneas até `SCAN_QR_CODE`; não prova pairing, duas contas `WORKING` nem envio. Não bloquear segunda sessão por tier: conferir resposta estruturada e pós-condição da operação.
 - Engine NOWEB default; WEBJS apenas se precisar stickers animados / botões
 - Auth: env do WAHA recebe **hash SHA512 hex** da api key; cliente envia plaintext em `X-Api-Key`
 - Webhooks: HMAC SHA512 com `crypto.timingSafeEqual`
@@ -159,6 +196,7 @@ DeskcommCRM é um sistema operacional de vendas open source com agentes de IA na
 | `docs/business-rules/` | Regras de negócio fora do código |
 | `docs/research/reference-synthesis.md` | Arquitetura herdada do curso WAHA |
 | `tasks/todo.md` | Workflow de construção atual |
+| `app/globals.css` | **Tailwind 4 é CSS-first: não existe `tailwind.config.ts`.** Tokens em `:root` / `[data-theme]`, ponte token → utilitário no `@theme inline`, alcance do scanner nos `@source`. Vigiado por `tests/unit/tailwind-tokens.test.ts` |
 | `lib/api/wrappers.ts` | `ok()`, `fail()`, tipos `ApiSuccess<T>` / `ApiError` |
 | `lib/api/errors.ts` | Códigos de erro canônicos |
 | `lib/env.ts` | Validação Zod das env vars (lança no startup se faltar crítica) |
@@ -260,8 +298,100 @@ sem TTY) — histórico completo, comandos exatos e a armadilha do "vermelho que
 propósito — precisa de Postgres real, roda via `pnpm test:db`/`scripts/test-db.sh`. `test:unit` verde
 não prova isolamento RLS.
 
-Checks **obrigatórios** na branch protection da `main` — **reconfira na fonte, não confie nesta
-lista** (histórico de já ter divergido em [`docs/testing/gotchas-ci.md`](docs/testing/gotchas-ci.md)):
+Duas armadilhas irmãs, as duas pagas no mesmo dia:
+
+- **Gate escolhido não é suíte.** `typecheck`, `lint`, `lint:channels` e os arquivos de cerca
+  podem estar todos verdes enquanto a suíte tem 17 falhas — nenhum deles toca o arquivo que
+  quebrou. Antes de abrir PR, rode a suíte, não os gates que você lembra.
+- **Não corte a saída.** `| tail -8` guarda o rodapé e joga fora os NOMES dos arquivos que
+  falharam, que é o único dado que permite reconciliar depois. Redirecione e filtre:
+
+  ```bash
+  pnpm test:unit > /tmp/vt.log 2>&1; echo "exit=$?"
+  grep -aE "Test Files|Tests " /tmp/vt.log | tail -2                   # ← a AUTORIDADE
+  grep -aE "^ *FAIL " /tmp/vt.log | sed 's/ > .*//' | sort | uniq -c   # arquivos + contagem
+  ```
+
+  **O rodapé é a autoridade; o `grep FAIL` é conveniência — e ele pode devolver
+  vazio COM falhas.** Medido: em execução sem TTY o reporter padrão às vezes
+  imprime só o resumo, e os nomes dos arquivos vermelhos nunca chegam a ser
+  escritos. Uma rodada com `3 failed` produziu um log de 629 bytes onde `FAIL`
+  não aparece em posição nenhuma — e o vazio dessa sonda lê exatamente como
+  "nenhuma falha".
+
+  Por isso **compare as duas saídas antes de concluir** — e compare a linha
+  certa: `Test Files N failed` conta ARQUIVOS, `Tests N failed` conta CASOS, e o
+  `uniq -c` do `grep` soma CASOS. O controle é contra a segunda linha:
+
+  ```bash
+  r=$(grep -aE "^ *Tests " /tmp/vt.log | tail -1 | grep -oE "[0-9]+ failed" | head -1)
+  g=$(grep -acE "^ *FAIL " /tmp/vt.log)
+  echo "rodapé: ${r:-0 failed} | grep contou: $g"   # têm de bater
+  ```
+
+  Se não baterem, a sonda está cega — troque por `--reporter=verbose` e rode de
+  novo, em vez de acreditar no silêncio.
+
+  **E as duas podem bater em zero com a suíte reprovada.** O Vitest sai com
+  `exit=1` quando há **erro não tratado** durante a execução, mesmo com todos os
+  testes passando — e esse erro aparece numa TERCEIRA linha do rodapé, que
+  nenhuma das duas sondas acima lê:
+
+  ```
+   Test Files  866 passed (866)
+        Tests  8904 passed | 1 expected fail (8905)
+       Errors  1 error          ← só o exit code viu isto
+  ```
+
+  Medido em 2026-09-15: `EnvironmentTeardownError: [vitest-worker]: Closing rpc
+  while "onUserConsoleLog" was pending`, sob carga. Rodapé `0 failed`, `grep FAIL`
+  vazio, exit 1. **O exit code é a autoridade; o rodapé e o grep são explicação
+  dele.** Quando o exit diverge dos dois, leia a linha `Errors` antes de concluir
+  qualquer coisa:
+
+  ```bash
+  grep -aE "^ *Errors " /tmp/vt.log      # vazio é o esperado
+  ``` (Comparar contra `Test Files` dá
+  divergência falsa: `2 failed` de arquivos contra `7` de casos parece defeito
+  da sonda e é só régua trocada.)
+
+**Vermelho local que NÃO é seu:** `lib/ai/dispatcher/rate-limit.test.ts` falha em 5 casos, com
+15s de timeout cada, quando o `.env.local` tem `UPSTASH_REDIS_REST_URL`/`TOKEN` e o Redis para o
+qual eles apontam **não está de pé** (neste repo é o `serverless-redis-http` local, não a nuvem).
+O `tests/setup/vitest.setup.ts` carrega o `.env.local` para dentro do `process.env`, e o módulo
+só usa o contador em memória quando essas variáveis estão **ausentes**. Provado nos dois sentidos.
+No CI não há `UPSTASH` nenhum, então lá o caminho é o contador em memória e o arquivo passa.
+
+Checks **obrigatórios** na branch protection da `main` (verificado na configuração, não só no papel):
+
+- **`verify`** (`ci.yml`) — typecheck + lint + test:unit.
+- **`invariants`** (`ci.yml`) — `pnpm test:db`: sobe `pgvector/pgvector:pg15` — o PISO que dizemos suportar, não a versão mais rica que temos à mão —, aplica `supabase/baseline.sql` em modo install (`ON_ERROR_STOP=1`) e update (idempotência), e roda os testes de invariante, incluindo o de isolamento RLS entre 2 organizações.
+- **`build-and-size`** (`perf.yml`) — `pnpm build` em Node 22.
+- **`e2e`** (`e2e.yml`) — sobe Supabase local, aplica o `baseline.sql` e roda **todas as specs Playwright menos as que `FORA_DO_CI` declara**. O número saiu daqui de propósito: ele apodreceu **cinco** vezes (a quinta em 2026-08-24, quando `inbox-quem-manda.spec.ts` entrou), e a condição que o PR #242 pôs para parar de recontar já tinha vencido na quarta. Quem precisa do número roda o comando abaixo — comando não envelhece. Quais ficam de fora, e por quê, é o que a própria variável diz — **não confie nesta linha, leia-a**:
+
+  ```bash
+  git show origin/main:.github/workflows/e2e.yml | \
+    python3 -c "import sys,re; y=sys.stdin.read(); print(sorted({s for _,c in re.findall(r'(FORA_DO_CI):\s*>-\n((?:[ ]{8,}.*\n)+)',y) for s in re.findall(r'[a-z0-9-]+\.spec\.ts',c)}))"
+  ```
+
+  Esta frase já dizia "a **única** de fora é `vps-fresh-onboarding`" e estava errada: em 2026-09-04 a variável listava **duas** (`inbox-tempo-real` entrou depois). É o mesmo defeito que o parágrafo acima descreve — afirmação de estado que envelhece —, cometido na frase seguinte à que o denuncia. O que continua verdade e é o que importa: `vps-fresh-onboarding` é a **P0** da doutrina de QA Visual, então `e2e` verde **não** prova a jornada de instalação fresca, que é o produto que se vende.
+
+  **Não confie em `grep` no arquivo inteiro.** `grep -oE '[a-z0-9-]+\.spec\.ts' .github/workflows/e2e.yml | sort -u | wc -l` conta quem é CITADO, não quem é INVOCADO: a `FORA_DO_CI` é uma variável YAML como as outras e entra na conta. (Até 2026-08-14 este parágrafo culpava "menções em comentários", e isso é falso — medido, o conjunto de specs citadas fora de variável é **vazio**.) O que roda são as `SPECS_PARTE_*`:
+
+  ```bash
+  ls tests/e2e/*.spec.ts | wc -l                    # quantas existem
+  python3 - <<'PY'                                  # quantas o CI invoca
+  import re
+  y = open(".github/workflows/e2e.yml", encoding="utf-8").read()
+  print(len({s for _, c in re.findall(r'(SPECS_PARTE_\d+):\s*>-\n((?:[ ]{8,}.*\n)+)', y)
+               for s in re.findall(r'[a-z0-9-]+\.spec\.ts', c)}))
+  PY
+  ```
+
+  **Por que não há mais número aqui.** O conserto que este parágrafo pedia era pôr a prosa sob gate — `tests/unit/e2e-cobertura-completa.test.ts` cobrando também o texto daqui. Tirar o número é melhor e mais barato: não há o que policiar, e a diferença entre disco e CI segue vigiada onde importa, no próprio teste, que reprova toda spec nova que não esteja em `SPECS_PARTE_*` ou em `FORA_DO_CI` **com motivo escrito**. Prosa que nenhum gate lê é prosa que diverge; prosa que não afirma número não tem como divergir.
+- **`imagens-ok`** (`publish-image.yml`) — reprova quando qualquer uma das três imagens Docker não constrói. **É obrigatório desde 2026-08-13**; este arquivo dizia o contrário em outro parágrafo (ver a doutrina de packaging acima, já corrigida).
+
+Todos os **cinco** são **obrigatórios** — medido em 2026-08-14 na branch protection:
 
 ```console
 $ gh api repos/melgarafael/DeskcommCRM/branches/main/protection --jq '.required_status_checks.contexts|join(", ")'
@@ -284,14 +414,14 @@ Ao mexer em schema, RLS, RBAC, atribuição, escopo, roteamento, follow-up, webh
 
 **Prioridade: primeira impressão acima de tudo.** Onboarding e as primeiras ações (criar conta, conectar canal, primeiro lead, primeiro convite) são a primeira impressão do usuário — bug ali é abandono.
 
-**"Recurso real" = prova pela tela (Playwright, conta real, curl só como diagnóstico) + banco fresco
-do `baseline.sql` + dependências locais reais (WAHA/Redis) + envs opcionais AUSENTES + receiver
-HTTP real pra efeito colateral externo.** Registro obrigatório em
-[`docs/testing/user-journey-map.md`](docs/testing/user-journey-map.md) (mapa de jornadas, receita de
-ambiente fresco completa, e o que exatamente conta como "recurso real") + specs em
-`tests/e2e/*.spec.ts` + evidência em `.superpowers/evidence/`. Bug achado executando → conserta na
-causa raiz, commit próprio, re-teste verde como prova. Medidas de front-end sempre por ferramenta
-(`getBoundingClientRect`/`getComputedStyle`), nunca a olho.
+**Registro obrigatório (senão o progresso é invisível):**
+- Mapa de jornadas vivo em `docs/testing/user-journey-map.md` — casos por jornada, prioridade (`[P0]` primeira impressão), e achados. Atualize quando adicionar cobertura ou achar bug.
+- Specs em `tests/e2e/*.spec.ts` que dirigem o **frontend** (não só API). Evidência visual (screenshot/trace) em `.superpowers/evidence/`.
+- Bug achado executando → **conserta na causa raiz**, com migration versionada se tocar schema (ver doutrina abaixo), commit próprio, e re-teste verde como prova.
+
+**Medidas de front-end por ferramenta, nunca a olho** (`getBoundingClientRect`/`getComputedStyle` no Playwright). Ver `feedback_protocolo_execucao_visivel` na memória.
+
+**Receita de ambiente fresco (não-óbvia):** banco = `baseline.sql` num Supabase local **pg15** (`config.toml major_version = 15`). Já foi pg17, por causa de 9 `GRANT MAINTAIN` que o `pg_dump` emitiu sozinho; hoje quem guarda o piso é `tests/unit/baseline-no-piso-do-postgres.test.ts`; `next build` + `next start` (produção — `next dev` compila lento demais e o Turbopack quebra `cookies()`); **worktree com `node_modules` real, nunca symlink** (Turbopack rejeita symlink "out of filesystem root") e **fora de `/tmp`** (é limpo no meio da sessão — commite cada marco). Detalhes em [[project_invite_e2e_and_bugs]].
 
 ---
 
@@ -313,14 +443,24 @@ causa raiz, commit próprio, re-teste verde como prova. Medidas de front-end sem
 
 Processo padrão (siga sempre):
 
-1. **Arquivo versionado** em `supabase/migrations/`: `<timestamp>_<NNNN>_<slug>.sql`. `NNNN` é o próximo sequencial (veja `ls supabase/migrations/`).
-2. **Idempotente sempre que possível**: `if not exists`, `create or replace function` — pode ser re-aplicada sem quebrar/duplicar.
-3. **Portável em `psql` puro**: sem temp table fora de transação explícita, sem `BEGIN`/`COMMIT` (o runner já envolve). Prefira CTE/window/coluna-mapa a temp table.
-4. **Data migration genérica**: pense em QUALQUER banco de clone, nunca hardcode ID do seu tenant. Repointe FK pelo catálogo (`information_schema`) pra não perder histórico.
-5. **Registre no MANIFEST**: linha em `supabase/migrations/MANIFEST.md` (versão, nome, QUÊ/PORQUÊ).
-6. **Reflita no `supabase/baseline.sql` (OBRIGATÓRIO — é o que o kit self-host aplica)**: apêndice idempotente no fim do arquivo, auto-curativo (`if not exists`, dedup ANTES de constraint nova). Sem isso, clones não recebem a mudança ou quebram no `update.sh`. Migração só em `migrations/` sem entrar no baseline **não chega aos self-hosters**.
-7. **Aplique e prove**: via `mcp__plugin_supabase_supabase__apply_migration`, capture ANTES/DEPOIS, prove invariantes. Contrato mudou → regenere `lib/database.types.ts`. Schema no kit → valide baseline num Postgres descartável (`install` fresh + `update` re-aplicar, ambos passam).
-8. **Backfill de dados quebrados**: dedup/corrija ANTES de criar constraint nova (senão falha nos dados existentes).
+1. **Arquivo versionado** em `supabase/migrations/` com o padrão do repo: `<timestamp>_<NNNN>_<slug>.sql` (ex.: `20260706210000_0027_whatsapp_conversation_unification.sql`). `NNNN` é o próximo número sequencial — e **não** é o do último arquivo da listagem:
+
+   ```bash
+   ls supabase/migrations/ | grep -oE '_[0-9]{4}_' | tr -d _ | sort -n | tail -1
+   ```
+
+   O nome do arquivo começa pelo **timestamp**, e timestamp e `NNNN` podem discordar: em
+   09/09/2026 o `ls | tail -1` devolvia o `_0230_` (timestamp de 07/09) enquanto o maior `NNNN`
+   era `_0231_` (timestamp de 05/09). Um contribuidor externo seguiu a instrução antiga ao pé da
+   letra, escolheu `0231`, e o `manifest-x-migrations` reprovou o PR dele por colisão — a
+   instrução é que estava errada, não ele. Ordene pelo número, nunca pela listagem.
+2. **Idempotente sempre que possível**: `add column if not exists`, `create ... if not exists`, `create or replace function`. Uma migration deve poder ser re-aplicada sem quebrar nem duplicar efeito.
+3. **Portável em `psql` puro** (clones podem não usar o MCP/CLI Supabase): **sem** `create temporary table ... on commit drop` fora de transação explícita; **sem** `BEGIN`/`COMMIT` explícito (o runner já envolve em transação, como as demais migrations). Prefira CTEs, subqueries de janela e colunas-mapa (ex.: `is_merged_into`) a temp tables.
+4. **Data migrations genéricas**: se a migration corrige/deduplica dados, escreva pensando em QUALQUER banco de clone (não hardcode IDs do seu tenant). Repointe FKs conferindo o catálogo (`information_schema` FK map) para não perder histórico.
+5. **Registre no MANIFEST**: adicione uma linha em `supabase/migrations/MANIFEST.md` (tabela "Applied") descrevendo versão, nome e o QUÊ/PORQUÊ.
+6. **Reflita no `supabase/baseline.sql` (OBRIGATÓRIO — é o que o kit self-host aplica).** O baseline é um dump `--schema-only` + um **apêndice idempotente** no fim do arquivo (blocos rotulados `-- ---- <coisa> (migration NNNN) ----`). O kit HostGator aplica **só o baseline.sql**, tanto no `install.sh` (banco novo, `ON_ERROR_STOP=1`) quanto no `update.sh` (re-aplica em banco existente, **sem** `ON_ERROR_STOP`). Então toda mudança de schema pós-snapshot DEVE ser acrescentada ao apêndice, **idempotente e auto-curativa**: `add column if not exists`, `create ... if not exists`, `create or replace function`, e — se a mudança adiciona constraint — **deduplicar/corrigir os dados ANTES** de criar a constraint (senão o `update.sh` de um clone bugado quebra). Sem isto, clones não recebem a mudança (ou quebram ao atualizar). Migração adicionada só em `migrations/` mas não no baseline **não chega aos self-hosters**.
+7. **Aplique e prove**: aplique via `mcp__plugin_supabase_supabase__apply_migration` (ou `supabase db push`), capture o estado ANTES/DEPOIS e prove invariantes (ex.: contagem de linhas que não pode mudar). Se mexeu em contrato, regenere `lib/database.types.ts`. Para mudanças de schema no kit, valide o baseline num Postgres descartável (`pgvector/pgvector:pg15` + extensões) aplicando `install` (fresh, `ON_ERROR_STOP=1`) e `update` (re-aplicar, sem a flag) — ambos têm que passar.
+8. **Backfill de dados quebrados existentes**: constraint nova falha se os dados atuais a violam — a migration (e o apêndice do baseline) deve deduplicar/corrigir ANTES de criar a constraint.
 9. **Função nova em `public` nasce EXPOSTA — revogue as DUAS origens.** Toda `create function` no schema `public` termina com:
 
    ```sql
@@ -341,6 +481,16 @@ Processo padrão (siga sempre):
 ---
 
 ## Skills relevantes a usar (Claude Code)
+
+**Guias embutidos neste repositório** (`.claude/skills/`, espelho gerado de `.agents/skills/` — a
+mesma tabela vale para Codex, Cursor, OpenCode e Antigravity; ver `AGENTS.md`):
+
+- `deskcomm-instalar` — instalar, atualizar ou consertar a instalação numa VPS
+- `deskcomm-cliente-novo` — configurar o CRM para um cliente ou nicho (agentes, roteadores, follow-ups, conhecimento)
+- `deskcomm-metricas` — desempenho, conversão, custo de IA, funil, relatório
+- `deskcomm-prompt` — afinar o prompt de um agente que não performa
+- `deskcomm-contribuir` — o espelho da triagem, antes do PR; fica quieto para o mantenedor
+- `deskcomm-doutrina` — as três regras que mais custam, antes de escrever código
 
 - `superpowers:brainstorming` — antes de implementar feature não-trivial
 - `superpowers:writing-plans` — pra task com mais de 1 etapa de DB/API
@@ -372,7 +522,17 @@ Antes de declarar uma task pronta:
 11. **Mudança de schema saiu como migration versionada + linha no MANIFEST** (ver Doutrina de Migrations) — clones conseguem atualizar
 12. **Se tocou UI/fluxo de usuário: provado pela tela como um leigo faria**, em ambiente fresco estilo VPS, com evidência visual (ver Doutrina de QA Visual com Recursos Reais) — curl não conta
 13. **Living System Checklist respondido** (lei em `docs/doctrine/sistema-vivo.md`; racional no manual `docs/doctrine/sistema-vivo/`) — a feature não é ilha: tem entrada + saída, emite atividade/log, aparece na tela, tem porta na navegação, tem mecanismo anti-morte, **declara seu laço de retorno** (invariante 7 — o que muda no sistema quando ela erra), e o mapa vivo (`docs/architecture/`) reflete peça nova com ≥2 arestas. Resposta que não **nomeia o artefato concreto** (consumidor real, tela real, log real) não conta
-14. **Tela nova tem porta** — declarada em `lib/navigation/registry.ts` com seu grupo, ou na allowlist de `tests/unit/navegacao-completude.test.ts` **com justificativa escrita**. Ter tela e ser alcançável são coisas diferentes: o CI reprova tela que existe mas em que só se chega digitando a URL
+14. **Tela nova tem porta** — declarada em **`lib/navigation/catalogo.ts`** (no `NAV_CATALOG`, com seu grupo), ou na allowlist de `tests/unit/navegacao-completude.test.ts` **com justificativa escrita**. Ter tela e ser alcançável são coisas diferentes: o CI reprova tela que existe mas em que só se chega digitando a URL.
+
+    ⚠️ Esta linha dizia `lib/navigation/registry.ts`, e quem a seguisse abria um
+    arquivo **sem um único lugar onde declarar**: o `registry.ts` só deriva
+    (`NAV_DESTINATIONS` sai de `NAV_CATALOG`) e reexporta. Ele é a FACE do
+    módulo — é dele que o teste importa, e por isso o engano é fácil. Quem
+    declara é o catálogo. Para conferir sem acreditar nesta linha:
+
+    ```bash
+    grep -c 'href:' lib/navigation/catalogo.ts lib/navigation/registry.ts
+    ```
 15. **Se tocou Dockerfile, compose ou setup kit: a mudança chega a quem já instalou** (lei em `docs/doctrine/packaging.md`) — nenhum serviço de produção ficou `build:`-only; variável nova tem default que não quebra `.env` antigo; a atualização não pede edição manual de arquivo; e, se mudou o que a imagem contém, o `update.sh` alcança essa peça. Rode `pnpm test:shell` — é o único gate que exercita o kit
 16. **Se o PR muda comportamento, corrija a afirmação de estado sobre esse comportamento** — só
     sobre o que você mudou, só nos documentos de autoridade. Onde a afirmação puder virar

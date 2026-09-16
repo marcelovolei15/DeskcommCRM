@@ -18,6 +18,13 @@ export type AgentInboxSeverity = "info" | "warn" | "critical";
  * de quê.
  */
 export const KIND_LABEL = {
+  // Diz que ALGUÉM ESPERA, não que um registro envelheceu. "Caso parado há
+  // 24h" descreve a tabela; do lado de lá existe uma pessoa que pediu algo e
+  // não teve resposta, e é isso que faz quem lê a Central abrir o item.
+  case_stale: "Um atendimento espera decisão da equipe",
+  appointment_outcome_required:"Confirme a presença no compromisso",
+  appointment_recovery_review:"A recuperação precisa de uma decisão da equipe",
+  routing_unassigned: "Conversa aguardando responsável",
   qr_rescan: "Conexão do WhatsApp caiu — precisa escanear o QR de novo",
   job_dead: "Uma tarefa do assistente falhou e parou de tentar",
   event_dead: "Um evento recebido não pôde ser processado",
@@ -62,6 +69,11 @@ export const KIND_LABEL = {
   // Diz o que ACONTECEU com o material, e nunca "a indexação falhou": quem
   // subiu um PDF quer saber que o agente ainda não sabe o que está nele.
   conhecimento_nao_indexado: "Um material que você enviou não entrou na base de conhecimento",
+  // Diz o que ficou por fazer, não o que o sistema registrou: "chamada perdida"
+  // é o fato, e o que a pessoa precisa saber é que alguém tentou falar e não
+  // conseguiu. O motivo cru do upstream (`user_ended`, `do_not_disturb`) nunca
+  // chega à tela — vira frase de gente no corpo do aviso, escrito pelo worker.
+  voice_call_missed: "Alguém ligou e ninguém atendeu",
   other: "Aviso do assistente",
 } as const satisfies Record<InboxKind, string>;
 

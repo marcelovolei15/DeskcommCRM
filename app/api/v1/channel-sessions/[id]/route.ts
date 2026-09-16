@@ -1,3 +1,4 @@
+import { requireSupportWrite } from "@/lib/impersonate/support";
 /**
  * GET /api/v1/channel-sessions/[id] — health check AO VIVO de um canal.
  *
@@ -17,12 +18,13 @@
  *
  * Qualquer membro da org pode consultar. organization_id vem da sessão.
  */
+import { assertWahaConnectionIdle, ChannelConnectionError } from "@/lib/channels/connect-waha";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { audit } from "@/lib/audit";
 import { ok, fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { CHANNEL_PROVIDER_WAHA } from "@/lib/channels/capabilities";
 import { numeroObservadoDaSessao } from "@/lib/channels/numero-observado";
@@ -30,6 +32,7 @@ import { isChannelStatus } from "@/lib/schemas/channels";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getWahaClient, wahaFriendlyError } from "@/lib/waha/client";
+import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +51,22 @@ export interface ChannelDeletionImpact {
    * enquanto elas existirem. É o que torna o arquivamento obrigatório, não uma
    * preferência.
    */
-  history: { conversations: number; messages: number; agent_versions: number };
+  history: {
+    conversations: number;
+    messages: number;
+    agent_versions: number;
+    /**
+     * Chamadas de voz (migration 0232). Entra em `history`, e não em
+     * `configuration`, porque é REGISTRO do que aconteceu com pessoas — não
+     * ajuste que se refaz. A FK nasceu `on delete cascade` e a lista aqui nem a
+     * enumerava: o diálogo mostrava zeros, oferecia "excluir", e o histórico de
+     * ligações sumia junto. A 0235 a tornou `on delete restrict`, então agora é
+     * o Postgres que garante o arquivamento — esta contagem existe para o
+     * diálogo poder DIZER isso antes do clique, em vez de o usuário descobrir
+     * por um 23503.
+     */
+    voice_calls: number;
+  };
   /**
    * Referências com ON DELETE CASCADE que NÃO são estado de runtime: sumiriam em
    * silêncio junto com a linha. `ai_routers` leva os `ai_router_members` dele
@@ -66,6 +84,7 @@ type DependentTable =
   | "conversations"
   | "messages"
   | "ai_agent_versions"
+  | "voice_calls"
   | "ai_routers"
   | "channel_knobs"
   | "before_send_traces";
@@ -98,16 +117,23 @@ async function loadDeletionImpact(
     return n ?? 0;
   };
 
-  const [conversations, messages, agentVersions, routers, knobs, traces] = await Promise.all([
-    count("conversations"),
-    count("messages"),
-    count("ai_agent_versions"),
-    count("ai_routers"),
-    count("channel_knobs"),
-    count("before_send_traces"),
-  ]);
+  const [conversations, messages, agentVersions, voiceCalls, routers, knobs, traces] =
+    await Promise.all([
+      count("conversations"),
+      count("messages"),
+      count("ai_agent_versions"),
+      count("voice_calls"),
+      count("ai_routers"),
+      count("channel_knobs"),
+      count("before_send_traces"),
+    ]);
 
-  const history = { conversations, messages, agent_versions: agentVersions };
+  const history = {
+    conversations,
+    messages,
+    agent_versions: agentVersions,
+    voice_calls: voiceCalls,
+  };
   const configuration = {
     ai_routers: routers,
     channel_knobs: knobs,
@@ -148,6 +174,7 @@ export async function GET(
   const comImpacto = <T extends object>(corpo: T): T & { deletion_impact?: ChannelDeletionImpact } =>
     impact ? { ...corpo, deletion_impact: impact } : corpo;
 
+  if (user.support?.access_mode === "support_readonly") return ok(comImpacto({ ...session, waha_configured: false }), { requestId });
   const waha = getWahaClient();
   // Canal oficial não tem sessão no transporte para consultar — `waha_session_name`
   // é NULL nele por CHECK, e perguntar assim mesmo pediria `/api/sessions/null`.
@@ -162,25 +189,19 @@ export async function GET(
   let liveStatus = session.status as string;
   let phoneNumber = session.phone_number as string | null;
   try {
-    const remote = (await waha.getSessionQr(nomeSessao)) as {
-      status?: string;
-      me?: { id?: string; pushName?: string };
-    };
-    if (remote.status) liveStatus = remote.status;
+    const remote = await waha.getVerifiedSession(nomeSessao);
+    liveStatus = remote?.status ?? "STOPPED";
     // O número vem do JID (`<phone>@c.us`), e a regra de quando ele VALE mora
     // em `numeroObservadoDaSessao` — inclusive por que não basta gravar sempre.
     // O que havia aqui só preenchia a coluna VAZIA, então um re-pareamento com
     // outro aparelho deixava o banco mentindo para sempre.
     phoneNumber = numeroObservadoDaSessao({
-      jid: remote.me?.id,
+      jid: typeof remote?.me?.id === "string" ? remote.me.id : null,
       statusAoVivo: liveStatus,
       gravado: phoneNumber,
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    // 404 no WAHA = sessão não iniciada lá → considera STOPPED.
-    if (msg.includes("404")) liveStatus = "STOPPED";
-    // outros erros: mantém o status do DB (não sobrescreve com ruído transitório).
+  } catch {
+    return fail("connection_status_failed", "Não foi possível conferir a conexão. Tente novamente.", 502, { requestId });
   }
 
   // Sincroniza o DB: sempre carimba o health check; atualiza status/telefone só se válido.
@@ -277,6 +298,9 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
   const { id } = await params;
 
@@ -286,7 +310,9 @@ export async function DELETE(
     allowPlatformAdmin: true,
   });
   if (!authz.ok) return authz.response;
+  const t = (texto: string) => traduzir(texto, authz.user.idioma);
   const { user, org: activeOrg } = authz;
+  if (await mfaEmDivida()) return fail("mfa_required", "Confirme a verificação em duas etapas.", 403, { requestId });
 
   const supabase = await createClient();
   const { data: session } = await supabase
@@ -295,7 +321,7 @@ export async function DELETE(
     .eq("organization_id", activeOrg.orgId)
     .eq("id", id)
     .maybeSingle();
-  if (!session) return fail("not_found", "Canal não encontrado.", 404, { requestId });
+  if (!session) return fail("not_found", t("Canal não encontrado."), 404, { requestId });
 
   const impact = await loadDeletionImpact(activeOrg.orgId, id);
   const arquivar = impact.outcome === "archive";
@@ -312,15 +338,19 @@ export async function DELETE(
     if (!waha) {
       return fail(
         "waha_not_configured",
-        "O WhatsApp (WAHA) não está configurado neste ambiente (faltam WAHA_API_BASE_URL e/ou WAHA_API_KEY) — sem ele o número não pode ser desconectado do aparelho.",
+        t("O WhatsApp (WAHA) não está configurado neste ambiente (faltam WAHA_API_BASE_URL e/ou WAHA_API_KEY) — sem ele o número não pode ser desconectado do aparelho."),
         503,
         { requestId },
       );
     }
     try {
+      await assertWahaConnectionIdle(createAdminClient(), activeOrg.orgId, id);
       await waha.logoutSession(session.waha_session_name as string);
       await waha.deleteSession(session.waha_session_name as string);
     } catch (err) {
+      if (err instanceof ChannelConnectionError) return fail(err.code, "Uma conexão está em andamento. Aguarde e tente novamente.", err.status, { requestId });
+      await supabase.from("channel_sessions").update({ status: "FAILED", status_reason: "connection_repair_required", last_status_change_at: now })
+        .eq("organization_id", activeOrg.orgId).eq("id", id);
       return fail("waha_error", wahaFriendlyError(err), 502, { requestId });
     }
   } else {

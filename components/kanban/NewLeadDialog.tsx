@@ -116,7 +116,7 @@ export function NewLeadDialog({
     const parsed = createLeadSchema.safeParse(payload);
     if (!parsed.success) {
       const first = parsed.error.issues[0];
-      toast.error(first?.message ?? "Dados inválidos");
+      toast.error(first?.message ?? t("Dados inválidos"));
       return;
     }
 
@@ -144,7 +144,7 @@ export function NewLeadDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Novo Lead</DialogTitle>
+          <DialogTitle>{t("Novo Lead")}</DialogTitle>
           <DialogDescription>
             {t("Crie um lead manualmente neste pipeline.")}
           </DialogDescription>
@@ -170,13 +170,13 @@ export function NewLeadDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Etapa</Label>
+            <Label>{t("Etapa")}</Label>
             <Select
               value={stageId}
               onValueChange={(v) => form.setValue("stage_id", v)}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Selecione a etapa" />
+                <SelectValue placeholder={t("Selecione a etapa")} />
               </SelectTrigger>
               <SelectContent>
                 {stages
@@ -207,7 +207,7 @@ export function NewLeadDialog({
               )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="expected_close_date">Fechamento previsto</Label>
+              <Label htmlFor="expected_close_date">{t("Fechamento previsto")}</Label>
               <Input
                 id="expected_close_date"
                 type="date"

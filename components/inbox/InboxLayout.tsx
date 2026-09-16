@@ -27,11 +27,12 @@ import { InboxKeyboardShortcuts } from "./InboxKeyboardShortcuts";
 import { ShortcutsHelpDialog } from "./ShortcutsHelpDialog";
 import { OpenConversationProvider } from "@/hooks/notifications/OpenConversationContext";
 // ADR-05: ícone de feature sai do mapa canônico, nunca do pacote direto.
-import { CaretLeft, IdentificationCard } from "@/lib/ui/icons";
+import { CaretLeft, ChatCircle, IdentificationCard } from "@/lib/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
+import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
 import { useAutomaticoAtivo } from "@/hooks/ai/useAutomaticoAtivo";
 
 /**
@@ -115,7 +116,8 @@ interface InboxLayoutProps {
 
 export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {}) {
   const t = useT();
-  const { activeOrg } = useAuth();
+  const { activeOrg, user } = useAuth();
+  const supportReadonly = user.support?.access_mode === "support_readonly";
   const orgId = activeOrg?.orgId ?? null;
 
   const router = useRouter();
@@ -141,6 +143,12 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
     },
     [tab, searchParams, router, pathname],
   );
+
+  // Desliga só os AUXILIARES e mantém a aba: a aba é onde a pessoa está, e
+  // limpá-la junto a tiraria do lugar sem ela ter pedido.
+  const limparFiltrosAuxiliares = useCallback(() => {
+    setFilterValue({ tab, search: "", onlyUnread: false });
+  }, [tab, setFilterValue]);
 
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
@@ -171,9 +179,16 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   const filters: ConversationsFilters = useMemo(
     () => ({
       ...tabToFilter(filterValue.tab, automaticoDaOrg),
-      search: filterValue.search || undefined,
+      // A tela NÃO pede o que a rota recusa: o hook trata falha com
+      // `showApiError`, então digitar a primeira letra de qualquer busca faria
+      // piscar um erro na cara de quem digita. A regra é a MESMA que o schema
+      // usa (`lib/inbox/termo-de-busca.ts`) — nunca repetida aqui.
+      search: buscaValeConsulta(filterValue.search)
+        ? filterValue.search
+        : undefined,
       channel_session_id: filterValue.channel_session_id,
       tag: filterValue.tag,
+      unread: filterValue.onlyUnread || undefined,
     }),
     [
       filterValue.tab,
@@ -181,16 +196,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       filterValue.search,
       filterValue.channel_session_id,
       filterValue.tag,
+      filterValue.onlyUnread,
     ],
   );
 
-  const clientFilter = useMemo(
-    () =>
-      filterValue.onlyUnread
-        ? (c: ConversationWithContact) => (c.unread_count_for_assignee ?? 0) > 0
-        : undefined,
-    [filterValue.onlyUnread],
-  );
 
   // We need the selected conversation object for header / composer / side panel.
   // Source it from the same query the list uses to avoid an extra request.
@@ -203,7 +212,35 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // Deep-link para conversa fora do filtro atual (ou fora do escopo do agent):
   // busca única RLS-scoped. 404/vazio ⇒ inacessível ⇒ estado vazio claro (GAP D),
   // nunca stack trace. A RLS (G4-01) é quem garante o não-vazamento.
-  const needsFetch = !!selectedId && !inList && !listQ.isLoading;
+  //
+  // ⚠️ ELA NÃO ESPERA A LISTA — e a espera custava DUAS voltas de rede inteiras.
+  //
+  // A condição tinha um terceiro termo, `&& !listQ.isLoading`, para poupar uma
+  // requisição quando a conversa fosse aparecer na lista de qualquer jeito. O
+  // preço real, medido no trace do CI (run 34226618108, deep-link para uma
+  // conversa FECHADA — que nenhuma aba da Fila devolve, então a busca única é a
+  // única fonte do objeto):
+  //
+  //   46.725  GET conversations?comando=aguardando               1091ms
+  //   48.275  GET conversations?comando=aguardando,automatico     896ms
+  //   49.183  GET conversations/<id>                              565ms
+  //   49.775  GET contacts/<id>/crm-summary                    (>1034ms)
+  //
+  // São QUATRO idas em série depois do documento. A lista é pedida duas vezes
+  // porque a `queryKey` muda quando `useAutomaticoAtivo` responde (ver
+  // `comandosDaFila`), e `isLoading` volta a ser verdadeiro na chave nova — ou
+  // seja, o gate segurava a busca única até a SEGUNDA lista assentar, e só
+  // então o painel do contato podia começar a carregar. O painel do contato
+  // aparecia ~4,7s depois da navegação, e é assim que `encerramento-atendimento`
+  // ficou intermitente: a Memória do contato chegava ~0,1–0,6s DEPOIS dos 5s da
+  // asserção (o screenshot de falha, tirado logo em seguida, já a mostra).
+  //
+  // Sem o gate, a busca única sai na primeira leva, em paralelo com a lista, e o
+  // objeto existe uma volta depois do documento em vez de três. O custo é UMA
+  // requisição extra por deep-link cuja conversa acabe aparecendo na lista —
+  // clicar numa conversa da lista já carregada continua sem pedir nada, porque
+  // aí `inList` já a tem no primeiro render.
+  const needsFetch = !!selectedId && !inList;
   const single = useConversation(selectedId, needsFetch);
   const selectedConversation: ConversationWithContact | null = inList ?? single.data ?? null;
   const selectionNotFound =
@@ -294,9 +331,12 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
   // parcialmente abaixo da borda, atrapalhando justo na hora de escrever.
   //
   // As duas parcelas NÃO estão na mesma unidade, e por isso o padding entra pelo
-  // token e não como `3rem`: o `tailwind.config.ts` remapeia a escala de spacing
-  // para `var(--space-N)` — `--space-6` é `24px` LITERAL (app/globals.css) —, mas
-  // não remapeia o `14`, que segue sendo `3.5rem` de verdade. Escrever a soma como
+  // token e não como `3rem`: o `@theme inline` de `app/globals.css` remapeia a
+  // escala de spacing para `var(--space-N)` — `--space-6` é `24px` LITERAL —, mas
+  // não remapeia o `14`, que o Tailwind 4 calcula pelo multiplicador `--spacing`
+  // e segue sendo `3.5rem` de verdade. (Até o Tailwind 4 quem remapeava era o
+  // `tailwind.config.ts`; o arquivo não existe mais, o efeito é o mesmo.)
+  // Escrever a soma como
   // `6.5rem` só acerta enquanto a raiz for 16px; com acessibilidade de fonte maior
   // ou menor o composer sai da tela de novo. Pelo token, a conta se auto-corrige
   // se a escala de espaçamento mudar.
@@ -375,8 +415,8 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             filters={filters}
             selectedId={selectedId}
             onSelect={handleSelect}
-            clientFilter={clientFilter}
             onVisibleChange={handleVisibleChange}
+            onLimparFiltros={limparFiltrosAuxiliares}
           />
         </div>
       </div>
@@ -450,7 +490,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             <Composer
               ref={composerRef}
               conversationId={selectedConversation.id}
-              blockedReason={blockedReason}
+              blockedReason={supportReadonly ? "Acompanhamento somente leitura" : blockedReason}
               janelaFechada={motivoDaJanela}
               disabled={selectedConversation.status === "closed"}
               contactName={selectedConversation.contacts?.name ?? null}
@@ -464,8 +504,10 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
             {t("Conversa não encontrada ou fora do seu acesso.")}
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {t("Selecione uma conversa")}
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+            <ChatCircle size={36} weight="thin" className="text-text-subtle" aria-hidden />
+            <p className="text-sm font-medium text-text-muted">{t("Selecione uma conversa")}</p>
+            <p className="text-xs text-text-muted">{t("Ou navegue com J e K")}</p>
           </div>
         )}
       </div>
@@ -479,8 +521,8 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
         selectedId={selectedId}
         onSelect={handleSelect}
         onFocusReply={handleFocusReply}
-        onClaim={handleClaim}
-        onClose={handleClose}
+        onClaim={supportReadonly ? () => {} : handleClaim}
+        onClose={supportReadonly ? () => {} : handleClose}
         onToggleHelp={() => setHelpOpen((v) => !v)}
       />
       <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />

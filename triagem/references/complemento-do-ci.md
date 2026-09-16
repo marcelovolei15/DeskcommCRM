@@ -218,3 +218,40 @@ exatamente o produto que se vende.
 
 Ler `e2e` verde como "jornada de usuário provada" é falso verde **declarado pelo próprio arquivo**.
 Para PR que toca instalação ou onboarding, a prova é o passe 5, não o job.
+
+---
+
+## 12. O `build` não é gate de teste — e é o único que cobre o EMIT
+
+**Gatilho:** qualquer PR que toque `next.config.ts`, `outputFileTracingIncludes`, `package.json`,
+lockfile, ou que dependa de binário nativo (`.node`). E **todo lote de integração**, sempre.
+
+**Checagem:** `pnpm build`, exit code direto.
+
+**Por que os outros gates não pegam:** `typecheck`, `lint`, `lint:channels`, `test:unit`,
+`test:shell` e `test:db` analisam ou executam **código**. O defeito desta classe mora na hora de
+**emitir o artefato** — o `.nft.json`, o standalone, a imagem. Medido em 14/09/2026: um lote com os
+seis verdes (823 arquivos de teste, 194 de invariante, 1553 asserções de banco) quebrou o `build`
+no CI com
+
+```
+FATAL: An unexpected Turbopack error occurred:
+- Is a directory (os error 21)
+- Execution of <NftJsonAsset as Asset>::content failed
+```
+
+A causa era um glob de `outputFileTracingIncludes` que casava o **symlink de plataforma** que o
+pnpm põe dentro de `node_modules/.pnpm/<pkg>/node_modules/<escopo>/` ao lado do pacote real. O
+tracer tenta ler o symlink como arquivo para calcular o hash e morre.
+
+**A armadilha do conserto**, que vale além deste caso: tirar o `include` devolve o build ao verde e
+**mantém o defeito que o PR existia para consertar**. Aponte o glob para o conteúdo dos pacotes, e
+prove as duas coisas — que o build passa **e** que o arquivo continua entrando:
+
+```bash
+pnpm build && find .next/standalone -name '*.node' -path '*<pacote>*'
+```
+
+`imagens-ok` é obrigatório na branch protection e depende deste build, então esta linha **tem**
+gate no CI. O que ela não tem é gate **antes** do CI — e num lote isso custa um ciclo inteiro de
+fila.

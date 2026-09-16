@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useT } from "@/hooks/i18n/useT";
-import { Plus, MagnifyingGlass, UploadSimple } from "@/lib/ui/icons";
+import { Plus, MagnifyingGlass, UploadSimple, UsersThree } from "@/lib/ui/icons";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,6 +18,9 @@ import { useContactList } from "@/hooks/contacts/useContactList";
 import { ContactsTable } from "@/components/contacts/ContactsTable";
 import { NewContactDialog } from "@/components/contacts/NewContactDialog";
 import { ImportContactsDialog } from "@/components/contacts/ImportContactsDialog";
+import { TAG_DE_CLIENTE } from "@/lib/contacts/cliente";
+import { useActiveOrg } from "@/hooks/auth/AuthProvider";
+import { MergeDialog } from "@/components/contacts/MergeDialog";
 import { EmptyContacts } from "@/components/empty";
 import type { ContactOrderBy } from "@/lib/schemas/contacts";
 
@@ -33,6 +36,7 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 export function ContactsListClient() {
   const t = useT();
+  const clientesLigado = useActiveOrg()?.cliente_pela_agenda === true;
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState<string | undefined>(undefined);
@@ -42,6 +46,7 @@ export function ContactsListClient() {
   const [limit, setLimit] = useState<number>(25);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [duplicadosOpen, setDuplicadosOpen] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearch(searchInput), 250);
@@ -62,8 +67,16 @@ export function ContactsListClient() {
   const tagOptions = useMemo(() => {
     const set = new Set<string>();
     for (const c of allContacts) for (const tag of c.tags) set.add(tag);
+    // `cliente` na lista mesmo que nenhum contato da página carregada a tenha —
+    // COM A REGRA LIGADA. As demais opções saem do que já foi paginado — o que
+    // basta para etiqueta que a equipe criou e usa em bloco, e falha justamente
+    // para esta, que o sistema escreve sozinho e cujo primeiro uso é "filtrar
+    // quem já é cliente" numa base grande, onde a primeira página pode não ter
+    // nenhum. Desligada, a opção fixa ofereceria um filtro de uma regra que não
+    // roda; quem já tem a etiqueta continua aparecendo pela linha de cima.
+    if (clientesLigado) set.add(TAG_DE_CLIENTE);
     return Array.from(set).sort();
-  }, [allContacts]);
+  }, [allContacts, clientesLigado]);
 
   const handleSort = useCallback(
     (column: ContactOrderBy) => {
@@ -92,6 +105,16 @@ export function ContactsListClient() {
           uma linha de dois botões sem isso comprime os rótulos.
         */}
         <div className="flex shrink-0 items-center gap-2">
+          {/*
+            A porta do recurso de duplicados fica AQUI, na tela que já existe, e
+            não num item de menu novo: quem descobre que tem contato repetido
+            descobre olhando a lista, e a barra lateral não precisa crescer para
+            um trabalho que se faz de vez em quando.
+          */}
+          <Button variant="outline" onClick={() => setDuplicadosOpen(true)}>
+            <UsersThree size={16} weight="bold" aria-hidden />
+            <span>{t("Duplicados")}</span>
+          </Button>
           <Button variant="outline" onClick={() => setImportOpen(true)}>
             <UploadSimple size={16} weight="bold" aria-hidden />
             <span>{t("Importar CSV")}</span>
@@ -238,6 +261,7 @@ export function ContactsListClient() {
 
       <NewContactDialog open={createOpen} onOpenChange={setCreateOpen} />
       <ImportContactsDialog open={importOpen} onOpenChange={setImportOpen} />
+      <MergeDialog open={duplicadosOpen} onOpenChange={setDuplicadosOpen} />
     </div>
   );
 }

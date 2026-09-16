@@ -39,8 +39,9 @@ import { TETO_TOOLS_POR_AGENTE } from "@/lib/mcp/tools/selecao-por-pacote";
 import { PROVEDORES } from "@/lib/ai/pontos/provedores";
 
 import { ModelPicker, useModelMeta } from "./ModelPicker";
-import { CHAVE_DA_INSTALACAO, CredentialPicker, findCredential } from "./CredentialPicker";
+import { CHAVE_DA_INSTALACAO, CredentialPicker, STATUS_LABEL, findCredential } from "./CredentialPicker";
 import { rotuloDoEstadoDoCanal } from "@/lib/channels/estado";
+import { bloqueioDePublicacao } from "@/lib/ai/agents/bloqueio-de-publicacao";
 import { ToolPicker } from "./ToolPicker";
 import { TriggerEditor, type TriggerValue } from "./TriggerEditor";
 import { HandoffKeywordsInput } from "./HandoffKeywordsInput";
@@ -56,7 +57,11 @@ import {
   createMcpAgentAction,
 } from "../_actions";
 
-import { versionCreateSchema, agentMcpCreateSchema } from "@/lib/ai/agents/validation";
+import {
+  versionCreateSchema,
+  agentMcpCreateSchema,
+  agentMcpPatchSchema,
+} from "@/lib/ai/agents/validation";
 import type { SelectableChannel as ChannelSessionLite } from "@/lib/channels/selectable";
 import type { AgentRow } from "@/hooks/ai/useAgent";
 import type { AgentVersionRow } from "@/hooks/ai/useAgentVersions";
@@ -223,6 +228,26 @@ function buildState(args: {
   };
 }
 
+/**
+ * As três colunas que moram em `ai_agents`, não em `ai_agent_versions`.
+ *
+ * Existir separado não é gosto: `versionCreateSchema` é `.strict()` e recusa
+ * estes campos, com razão — eles não descrevem a versão. O que faltava era o
+ * segundo construtor, e sem ele o modo EDIÇÃO mandava só a versão: a pessoa
+ * digitava o nome, via "Rascunho vN salvo.", publicava com sucesso, e o cartão
+ * da lista seguia com o nome antigo (issue #463). O modo CRIAÇÃO sempre
+ * mandou os três, e é por isso que o defeito só aparecia ao editar.
+ */
+function toCadastroPayload(s: FormState) {
+  return {
+    name: s.name.trim(),
+    // "" na tela é APAGAR, e apagar é `null` no banco — `undefined` seria
+    // "não mexi", e a descrição antiga sobreviveria a um campo esvaziado.
+    description: s.description.trim() === "" ? null : s.description.trim(),
+    priority: s.priority,
+  };
+}
+
 function toVersionPayload(s: FormState) {
   return {
     system_prompt: s.system_prompt,
@@ -230,9 +255,12 @@ function toVersionPayload(s: FormState) {
     model: s.model,
     // O token é da TELA; o contrato da versão é `null` = chave da instalação.
     credential_id: s.credential_id === CHAVE_DA_INSTALACAO ? null : s.credential_id,
+    // "" na tela é "ainda não escolhi o número", e no contrato da versão isso é
+    // `null`. Sem a tradução, o Zod recusaria a string vazia e o rascunho de
+    // quem ainda não conectou o WhatsApp não salvaria — o defeito de origem.
+    channel_session_id: s.channel_session_id === "" ? null : s.channel_session_id,
     tool_ids: s.tool_ids,
     trigger_config: s.trigger_config,
-    channel_session_id: s.channel_session_id,
     max_steps: s.max_steps,
     token_budget: s.token_budget,
     cost_budget_cents: s.cost_budget_cents,
@@ -311,6 +339,11 @@ export function AgentForm(props: Props) {
     // usuário de errar é a primeira coisa que ele vê nesta tela.
     if (form.name.trim().length === 0) errors.name = t("Dê um nome para este agente.");
     if (form.name.length > 120) errors.name = t("O nome pode ter até 120 caracteres.");
+    // A rota REST já cobra `0..1000` (`app/api/v1/ai/agents/[id]/route.ts:90`).
+    // Sem a mesma régua aqui, o número inválido só reprovaria no servidor e o
+    // aviso chegaria como erro genérico, depois de a versão já ter sido gravada.
+    if (!Number.isInteger(form.priority) || form.priority < 0 || form.priority > 1000)
+      errors.priority = t("A ordem de preferência vai de 0 a 1000.");
     if (form.system_prompt.trim().length < 10)
       errors.system_prompt = t("Escreva as instruções do agente (pelo menos uma frase).");
     // `.trim()` porque é o que o servidor mede: `z.string().trim().max(20000)`
@@ -332,8 +365,17 @@ export function AgentForm(props: Props) {
       !(props.provedoresDaInstalacao ?? []).includes(form.provider)
     )
       errors.credential_id = `${t("Esta instalação não tem chave de")} ${form.provider}. ${t("Escolha outra empresa de IA ou cadastre uma chave.")}`;
-    if (!form.channel_session_id)
-      errors.channel_session_id = t("Escolha por qual número de WhatsApp ele atende.");
+    // ⚠️ O NÚMERO NÃO ENTRA AQUI — de propósito, e não por esquecimento.
+    //
+    // Esta lista é o que impede de SALVAR. Exigir o número aqui travava o
+    // rascunho de toda instalação fresca: sem WhatsApp pareado não existe uma
+    // linha em `channel_sessions`, o seletor abria vazio, e o dono que acabou de
+    // escrever o prompt do atendente não conseguia guardá-lo — tinha de escolher
+    // de uma lista sem opção. Escrever quem o agente é e conectar o aparelho são
+    // dois dias diferentes na vida de quem instala.
+    //
+    // Quem cobra o número é `bloqueioDePublicacao` (logo abaixo): sem ele o
+    // agente não vai ao ar, e o botão "Publicar" explica o que falta.
     if (form.tool_ids.length > TETO_TOOLS_POR_AGENTE)
       errors.tool_ids = `${t("Máximo de")} ${TETO_TOOLS_POR_AGENTE} ${t("capacidades por agente.")}`;
 
@@ -351,19 +393,54 @@ export function AgentForm(props: Props) {
 
   const isValid = Object.keys(validation).length === 0;
 
+  /**
+   * A dica do botão "Publicar" — uma frase, vinda de UM motivo.
+   *
+   * A régua é `lib/ai/agents/bloqueio-de-publicacao.ts`, e ela saiu daqui porque
+   * aqui ela estava errada para o caso mais comum do produto: perguntava por uma
+   * LINHA de credencial (`cred`), e "a chave desta instalação" não é uma linha —
+   * é `credential_id: null`. Quem instalou pelo kit e nunca abriu a tela de
+   * Credenciais via o botão desabilitado para sempre, pedindo para escolher a
+   * chave que tinha acabado de escolher.
+   */
   const publishBlockReason = React.useMemo(() => {
     if (!isEdit) return t("Salve o agent antes de publicar.");
-    if (!props.draft) return t("Sem rascunho para publicar.");
-    if (!isValid) return t("Resolva os erros do formulário.");
-    if (dirty) return t("Salve o rascunho antes de publicar.");
-    if (!cred) return t("Escolha a chave de acesso da empresa de inteligência artificial.");
-    if (credSt !== "validated")
-      return `${t("Credencial")} ${form.provider} ${credSt === "invalid" ? t("inválida") : t("ainda não validada")}.`;
-    if (!channelSession) return t("Escolha por qual número de WhatsApp ele atende.");
-    if (channelSession.status !== "working" && channelSession.status !== "WORKING")
-      return `${t("Número WhatsApp não está conectado (status:")} ${channelSession.status}).`;
-    return null;
-  }, [isEdit, props, isValid, dirty, cred, credSt, form.provider, channelSession, t]);
+    const motivo = bloqueioDePublicacao({
+      temRascunhoVigente: !!props.draft,
+      formularioValido: isValid,
+      alteracoesNaoSalvas: dirty,
+      provedor: form.provider,
+      chave: {
+        daInstalacao: form.credential_id === CHAVE_DA_INSTALACAO,
+        instalacaoTemChaveDoProvedor: (props.provedoresDaInstalacao ?? []).includes(
+          form.provider,
+        ),
+        estadoDaCredencialDaOrg: credSt,
+      },
+      numero: { estado: channelSession?.status ?? null },
+    });
+    if (!motivo) return null;
+    switch (motivo.codigo) {
+      case "sem_rascunho":
+        return t("Sem rascunho para publicar.");
+      case "formulario_invalido":
+        return t("Resolva os erros do formulário.");
+      case "alteracoes_nao_salvas":
+        return t("Salve o rascunho antes de publicar.");
+      case "instalacao_sem_chave_do_provedor":
+        return `${t("Esta instalação não tem chave de")} ${motivo.provedor}. ${t("Escolha outra empresa de IA ou cadastre uma chave.")}`;
+      case "sem_chave":
+        return t("Escolha a chave de acesso da empresa de inteligência artificial.");
+      case "chave_nao_utilizavel":
+        return `${t("Credencial")} ${motivo.provedor} ${motivo.estado === "invalid" ? t("inválida") : t("ainda não validada")}.`;
+      case "sem_numero":
+        return t(
+          "Escolha por qual número de WhatsApp ele atende. O rascunho está salvo; conecte um número em Conexões e volte aqui para publicar.",
+        );
+      case "numero_desconectado":
+        return `${t("Número WhatsApp não está conectado (status:")} ${motivo.estado}).`;
+    }
+  }, [isEdit, props, isValid, dirty, credSt, form.provider, form.credential_id, channelSession, t]);
 
   // ---------------------------------------------------------------------
   // Handlers
@@ -378,7 +455,18 @@ export function AgentForm(props: Props) {
     setSaving(true);
     try {
       if (isEdit) {
-        const res = await saveAgentDraftAction(props.agent.id, toVersionPayload(form));
+        // A mesma régua do servidor, aqui, para o erro aparecer no campo em vez
+        // de voltar como 500 depois de a versão já ter sido gravada.
+        const cadastro = agentMcpPatchSchema.safeParse(toCadastroPayload(form));
+        if (!cadastro.success) {
+          toast.error(t("Validação falhou."));
+          return;
+        }
+        const res = await saveAgentDraftAction(
+          props.agent.id,
+          toVersionPayload(form),
+          cadastro.data,
+        );
         if (!res.ok) {
           toast.error(res.message ?? `${t("Erro")}: ${res.error}`);
           return;
@@ -636,7 +724,11 @@ export function AgentForm(props: Props) {
                 value={form.priority}
                 onChange={(e) => patch({ priority: Number(e.target.value) })}
                 disabled={disabled}
+                aria-invalid={!!validation.priority}
               />
+              {validation.priority ? (
+                <p className="text-xs text-destructive">{validation.priority}</p>
+              ) : null}
               <p className="text-xs text-muted-foreground">
                 {t(
                   "Quando mais de um agente puder atender a mesma conversa, o de número maior tenta primeiro. Se você só tem um agente, pode deixar como está.",
@@ -699,9 +791,9 @@ export function AgentForm(props: Props) {
             {validation.credential_id ? (
               <p className="text-xs text-destructive">{validation.credential_id}</p>
             ) : null}
-            {cred && credSt !== "validated" ? (
+            {cred && credSt && credSt !== "validated" ? (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                {t("Credencial selecionada está com status")} {credSt}
+                {t("Credencial selecionada está com status")} {t(STATUS_LABEL[credSt])}
                 {t(". Publish bloqueado até validar.")}
               </p>
             ) : null}
@@ -757,8 +849,29 @@ export function AgentForm(props: Props) {
                   ) : null}
                 </SelectContent>
               </Select>
-              {validation.channel_session_id ? (
-                <p className="text-xs text-destructive">{validation.channel_session_id}</p>
+              {/*
+                NÃO é erro: é o estado normal de quem ainda não pareou o aparelho.
+                Antes, esta linha era vermelha e vinha de `validation`, que também
+                travava o botão de salvar — o dono de uma instalação nova escrevia
+                o prompt inteiro e não conseguia guardar nada.
+              */}
+              {!form.channel_session_id ? (
+                <p className="text-xs text-muted-foreground">
+                  {props.channelSessions.length === 0 ? (
+                    <>
+                      {t("Nenhum número conectado ainda — o rascunho salva sem ele.")}{" "}
+                      <Link
+                        href="/app/connections"
+                        className="font-medium text-foreground underline underline-offset-4"
+                      >
+                        {t("Conectar WhatsApp")}
+                      </Link>{" "}
+                      {t("para poder publicar.")}
+                    </>
+                  ) : (
+                    t("Escolha o número para poder publicar. Sem ele, o rascunho salva mas não atende.")
+                  )}
+                </p>
               ) : null}
             </div>
           </Card>

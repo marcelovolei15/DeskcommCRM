@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { apiClient } from "@/lib/api/client";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useT } from "@/hooks/i18n/useT";
+import { ChannelAiAccess } from "./ChannelAiAccess";
 
 /**
  * Conectar um número por um PROVEDOR PARCEIRO.
@@ -34,6 +35,7 @@ import { useT } from "@/hooks/i18n/useT";
  */
 
 interface Estado {
+  channel_session_id?: string | null;
   label: string;
   connected: boolean;
   account_id: string | null;
@@ -60,7 +62,7 @@ function ParaColar({ rotulo, valor }: { rotulo: string; valor: string }) {
         {rotulo}
       </span>
       <div className="flex items-center gap-2">
-        <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1.5 text-xs">{valor}</code>
+        <code className="flex-1 overflow-x-auto rounded-md bg-muted px-2 py-1.5 text-xs">{valor}</code>
         <Button
           size="sm"
           variant="outline"
@@ -152,6 +154,7 @@ export function CanalParceiroClient() {
           </div>
         )}
 
+        {estado?.channel_session_id && <ChannelAiAccess channelId={estado.channel_session_id} />}
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="parceiro-conta">{t("Conta")}</Label>

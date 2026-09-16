@@ -49,6 +49,12 @@
  * shape quebrado) NUNCA derruba o turno — cai no `loadPublishedAgentConfig`
  * de hoje (sem router) com outcome 'classifier_failed' + log.warn. Um lead
  * real está esperando resposta; o router é estritamente aditivo.
+ *
+ * ⚠️ "silêncio não é desfecho possível" (regra 5) vale para os turnos que
+ * CHEGAM aqui. O gate de elegibilidade (migration 0203, canal com
+ * `metadata.ai_gate = 'allowlist'`) barra ANTES — no drain e no início do turno,
+ * via `decidirElegibilidadeDaConversa` — quando o contato não veio de uma origem
+ * elegível. Ali o silêncio É o desfecho, e de propósito.
  */
 import type pg from 'pg';
 
@@ -232,4 +238,39 @@ export async function resolveTurnAgent(
       outcome: 'classifier_failed',
     };
   }
+}
+
+/** One read-only selection before operation policy. A real queue job supplies correlation. */
+export async function resolveConversationTurn(
+  db: pg.Pool,
+  llmCfg: LlmEdgeConfig,
+  input: {
+    tenantId: string;
+    leadId: string;
+    jobId: string;
+    conversationId: string;
+    channelSessionId: string;
+    inbound: boolean;
+  },
+  deps: ResolveTurnAgentDeps,
+): Promise<TurnAgentResolution> {
+  const { rows } = await db.query<{
+    active_ai_agent_id: string | null;
+    active_intent: string | null;
+  }>(
+    'select active_ai_agent_id,active_intent from conversations where organization_id=$1 and id=$2',
+    [input.tenantId, input.conversationId],
+  );
+  const signal = input.inbound
+    ? (await db.query<{ body: string | null }>(
+        "select body from messages where organization_id=$1 and conversation_id=$2 and direction='inbound' order by sent_at desc,created_at desc,id desc limit 1",
+        [input.tenantId, input.conversationId],
+      )).rows[0]?.body ?? null
+    : null;
+  return resolveTurnAgent(db, llmCfg, {
+    ...input,
+    signal,
+    stickyAgentId: rows[0]?.active_ai_agent_id ?? null,
+    stickyIntent: rows[0]?.active_intent ?? null,
+  }, deps);
 }

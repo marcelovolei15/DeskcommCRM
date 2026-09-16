@@ -1,4 +1,8 @@
 "use client";
+import { AgendasConectadas } from "@/components/agenda/AgendasConectadas";
+import { PrazosDePresenca } from "@/components/agenda/PrazosDePresenca";
+import { ClientePelaAgenda } from "@/components/agenda/ClientePelaAgenda";
+import { DiasBloqueados } from "@/components/agenda/DiasBloqueados";
 
 import { useT } from "@/hooks/i18n/useT";
 
@@ -23,6 +27,9 @@ export interface TipoRow {
   default_owner_user_id: string | null;
   requires_confirmation: boolean;
   is_active: boolean;
+  reminder_enabled: boolean;
+  reminder_minutes_before: number;
+  reminder_extra_offsets_minutes: number[] | null;
 }
 
 /**
@@ -70,16 +77,122 @@ const VAZIO: Rascunho = {
   default_owner_user_id: "",
 };
 
+/**
+ * O LEMBRETE DO COMPROMISSO — o par de controles que faltava.
+ *
+ * O cron `agenda-reminder` lê `reminder_enabled` e `reminder_minutes_before`
+ * desde o `99c33257`, e nenhum dos dois estava em rota ou tela: ligar era
+ * impossível, então a varredura devolvia zero linhas em toda instalação. Isto é
+ * a outra metade do par (invariante 6 do Sistema Vivo: configuração tem
+ * superfície).
+ *
+ * ─── Componente próprio, e não mais dois campos no formulário ─────────────
+ *
+ * "Quantos minutos antes" só faz sentido com o aviso LIGADO, e um campo ativo
+ * ao lado de uma caixa desmarcada é o controle decorativo desta casa: quem
+ * digita 60 ali conclui que agendou alguma coisa. Isso exige estado, o resto do
+ * formulário de edição é não-controlado (`FormData`), e o formulário nasce e
+ * morre com o `editandoId` — então o estado inicial é sempre o que veio do
+ * servidor, sem `useEffect` de sincronização.
+ *
+ * ⚠️ **CAMPO DESABILITADO NÃO ENTRA NO `FormData`, e isso é o desenho.** Com o
+ * aviso desligado o `PATCH` manda `reminder_enabled: false` e OMITE os minutos:
+ * a antecedência guardada fica intacta para quando alguém religar, em vez de
+ * ser sobrescrita por um valor que a tela não deixou ninguém escolher.
+ */
+function LembreteDoCompromisso({ tipo }: { tipo: TipoRow }) {
+  const t = useT();
+  const [ligado, setLigado] = React.useState(tipo.reminder_enabled);
+
+  return (
+    <>
+      <label className="flex items-center gap-2 text-xs text-text-muted sm:col-span-2">
+        <input
+          type="checkbox"
+          name="reminder_enabled"
+          checked={ligado}
+          data-testid={`editar-lembrete-${tipo.id}`}
+          onChange={(e) => setLigado(e.target.checked)}
+          className="size-4 rounded-sm border-border accent-accent"
+        />
+        {t("Avisar o cliente antes do compromisso, pelo WhatsApp")}
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-text-muted">
+        {t("Quantos minutos antes")}
+        <input
+          name="reminder_minutes_before"
+          type="number"
+          // Os limites do `criarSchema` da rota, repetidos aqui para a recusa
+          // chegar no campo em vez de virar um toast vindo do servidor. Quem
+          // decide continua sendo a rota — a tela só evita a viagem.
+          min={15}
+          max={10080}
+          disabled={!ligado}
+          defaultValue={tipo.reminder_minutes_before}
+          data-testid={`editar-lembrete-minutos-${tipo.id}`}
+          className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text disabled:opacity-50"
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-text-muted">
+        {t("E de novo, quantos minutos antes")}
+        <input
+          name="reminder_extra_offsets_minutes"
+          type="text"
+          inputMode="numeric"
+          disabled={!ligado}
+          placeholder="180"
+          defaultValue={(tipo.reminder_extra_offsets_minutes ?? []).join(", ")}
+          data-testid={`editar-lembrete-extras-${tipo.id}`}
+          className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text disabled:opacity-50"
+        />
+        <span className="text-[11px] text-text-muted">
+          {t("Opcional. Até 3, separados por vírgula. Ex.: 180 avisa de novo 3 horas antes.")}
+        </span>
+      </label>
+    </>
+  );
+}
+
+/**
+ * "180, 60" → `[180, 60]`.
+ *
+ * Campo de texto porque a tela precisa alcançar os três degraus que a rota
+ * aceita, e três caixas numéricas para um recurso opcional é mais formulário do
+ * que o recurso merece.
+ *
+ * O que NÃO é número some em silêncio de propósito: a recusa com nome é da
+ * rota, que fala sobre faixa e quantidade. Aqui a limpeza é só de pontuação —
+ * vírgula sobrando, espaço, ponto-e-vírgula de quem copiou de outro lugar.
+ */
+export function lerDegrausExtras(bruto: string | null): number[] {
+  if (!bruto) return [];
+  return [
+    ...new Set(
+      bruto
+        .split(/[,;]/)
+        .map((p) => Number(p.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0),
+    ),
+  ].sort((a, b) => b - a);
+}
+
 export function TiposDeAgendamentoClient({
   tiposIniciais,
   pessoas,
   podeEditar,
   usuarioAtualId,
+  podeConfigurarGoogle,
+  clientePelaAgendaLigado,
+  podeLigarClientePelaAgenda,
 }: {
   tiposIniciais: TipoRow[];
   pessoas: Array<{ id: string; papel: string; nome: string }>;
   podeEditar: boolean;
   usuarioAtualId: string;
+  podeConfigurarGoogle: boolean;
+  /** `organizations.settings.crm.cliente_pela_agenda`, lido pela página. */
+  clientePelaAgendaLigado: boolean;
+  podeLigarClientePelaAgenda: boolean;
 }) {
   const t = useT();
   const router = useRouter();
@@ -127,6 +240,13 @@ export function TiposDeAgendamentoClient({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4" data-testid="tipos-de-agendamento-config">
+      {podeConfigurarGoogle && <AgendasConectadas />}
+      <PrazosDePresenca podeEditar={podeEditar}/>
+      <ClientePelaAgenda
+        ligadoInicial={clientePelaAgendaLigado}
+        podeLigar={podeLigarClientePelaAgenda}
+      />
+      <DiasBloqueados podeEditar={podeEditar}/>
       {podeEditar ? (
         <div>
           {criando ? (
@@ -163,7 +283,7 @@ export function TiposDeAgendamentoClient({
                   value={rascunho.name}
                   onChange={(e) => setRascunho((r) => ({ ...r, name: e.target.value }))}
                   placeholder={t("Retorno")}
-                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-none focus:border-border-strong"
+                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-hidden focus:border-border-strong"
                 />
               </label>
               <label className="flex flex-col gap-1 text-xs font-medium text-text-muted">
@@ -172,7 +292,7 @@ export function TiposDeAgendamentoClient({
                   data-testid="novo-tipo-categoria"
                   value={rascunho.category}
                   onChange={(e) => setRascunho((r) => ({ ...r, category: e.target.value }))}
-                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-none focus:border-border-strong"
+                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-hidden focus:border-border-strong"
                 >
                   {CATEGORIAS.map((c) => (
                     <option key={c.valor} value={c.valor}>
@@ -192,7 +312,7 @@ export function TiposDeAgendamentoClient({
                   onChange={(e) =>
                     setRascunho((r) => ({ ...r, duration_minutes: Number(e.target.value) }))
                   }
-                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-none focus:border-border-strong"
+                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-hidden focus:border-border-strong"
                 />
               </label>
               <label className="flex flex-col gap-1 text-xs font-medium text-text-muted">
@@ -201,11 +321,11 @@ export function TiposDeAgendamentoClient({
                   data-testid="novo-tipo-local"
                   value={rascunho.location_kind}
                   onChange={(e) => setRascunho((r) => ({ ...r, location_kind: e.target.value }))}
-                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-none focus:border-border-strong"
+                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-hidden focus:border-border-strong"
                 >
                   {LOCAIS.map((l) => (
                     <option key={l.valor} value={l.valor}>
-                      {l.rotulo}
+                      {t(l.rotulo)}
                     </option>
                   ))}
                 </select>
@@ -222,7 +342,7 @@ export function TiposDeAgendamentoClient({
                   onChange={(e) =>
                     setRascunho((r) => ({ ...r, default_owner_user_id: e.target.value }))
                   }
-                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-none focus:border-border-strong"
+                  className="rounded-md border border-border bg-surface-elevated p-2 text-sm text-text outline-hidden focus:border-border-strong"
                 >
                   <option value="">{t("Definir depois")}</option>
                   {pessoas.map((p) => (
@@ -234,7 +354,7 @@ export function TiposDeAgendamentoClient({
               </label>
               <div className="flex justify-end gap-2 sm:col-span-2">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setCriando(false)}>
-                  Cancelar
+                  {t("Cancelar")}
                 </Button>
                 <Button type="submit" size="sm" data-testid="salvar-novo-tipo" disabled={salvando}>
                   {salvando ? t("Criando…") : t("Criar tipo")}
@@ -243,7 +363,7 @@ export function TiposDeAgendamentoClient({
             </form>
           ) : (
             <Button size="sm" data-testid="abrir-novo-tipo" onClick={() => setCriando(true)}>
-              Novo tipo de agendamento
+              {t("Novo tipo de agendamento")}
             </Button>
           )}
         </div>
@@ -262,12 +382,15 @@ export function TiposDeAgendamentoClient({
             className={`rounded-lg border border-border bg-surface p-3 ${tipo.is_active ? "" : "opacity-60"}`}
           >
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-text">{t(tipo.name)}</span>
+              {/* Sem t(): é o nome que quem opera digitou no campo acima, não
+                  rótulo do sistema — traduzir trocaria "Retorno" por
+                  "Seguimiento" (chave existente, de outro contexto). */}
+              <span className="text-sm font-medium text-text">{tipo.name}</span>
               <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-text-muted">
-                {rotuloDe(CATEGORIAS, tipo.category)}
+                {t(rotuloDe(CATEGORIAS, tipo.category))}
               </span>
               <span className="text-xs tabular-nums text-text-muted">{tipo.duration_minutes} min</span>
-              <span className="text-xs text-text-muted">{rotuloDe(LOCAIS, tipo.location_kind)}</span>
+              <span className="text-xs text-text-muted">{t(rotuloDe(LOCAIS, tipo.location_kind))}</span>
               {!tipo.default_owner_user_id ? (
                 // O aviso existe porque o sintoma é MUDO: sem dono, a tela de
                 // marcar simplesmente não mostra horário, sem dizer por quê.
@@ -286,7 +409,7 @@ export function TiposDeAgendamentoClient({
                     type="button"
                     data-testid={`sem-dono-${tipo.id}`}
                     onClick={() => setEditandoId(tipo.id)}
-                    className="text-xs text-warning underline underline-offset-2 hover:text-warning/80"
+                    className="text-xs text-warning underline underline-offset-2"
                   >
                     {t("sem responsável — definir quem atende")}
                   </button>
@@ -295,6 +418,21 @@ export function TiposDeAgendamentoClient({
                     {t("sem responsável — não aparece para marcar")}
                   </span>
                 )
+              ) : null}
+              {tipo.reminder_enabled ? (
+                // O estado tem de aparecer SEM abrir o formulário: um aviso que
+                // sai sozinho para o telefone do cliente é a última coisa que
+                // pode viver escondida atrás de um clique em "Editar".
+                <span
+                  data-testid={`lembrete-ligado-${tipo.id}`}
+                  className="text-xs tabular-nums text-text-muted"
+                >
+                  {t("avisa o cliente")}{" "}
+                  {[tipo.reminder_minutes_before, ...(tipo.reminder_extra_offsets_minutes ?? [])]
+                    .sort((a, b) => b - a)
+                    .join(", ")}{" "}
+                  min {t("antes")}
+                </span>
               ) : null}
               {!tipo.is_active ? <span className="text-xs text-text-subtle">{t("desativado")}</span> : null}
               {podeEditar ? (
@@ -330,7 +468,15 @@ export function TiposDeAgendamentoClient({
                       disabled={salvando}
                       onClick={() =>
                         void comErro(
-                          () => apiClient.patch("/api/v1/agenda/tipos", { id: tipo.id, is_active: true } as never),
+                          // Rota PRÓPRIA, e o `as never` que estava aqui saiu.
+                          //
+                          // Este botão nunca funcionou: mandava `is_active` num
+                          // PATCH cujo schema é `criarSchema.partial()`, onde
+                          // esse campo não existe. Zod descarta chave
+                          // desconhecida em silêncio, o corpo chegava vazio e a
+                          // resposta era 422 "Nenhum campo para alterar.". O
+                          // cast era o que impedia o typecheck de acusar.
+                          () => apiClient.post("/api/v1/agenda/tipos/reativar", { id: tipo.id }),
                           "Tipo reativado.",
                         )
                       }
@@ -371,6 +517,29 @@ export function TiposDeAgendamentoClient({
                         // voltar — que é o laço de retorno correto.
                         default_owner_user_id:
                           String(dados.get("default_owner_user_id") ?? "") || null,
+                        // Caixa desmarcada não aparece no `FormData` — daí a
+                        // comparação, e não um `Boolean(...)` do valor ausente.
+                        reminder_enabled: dados.get("reminder_enabled") === "on",
+                        // O campo desabilitado também não aparece, e omitir é o
+                        // certo: desligar o aviso não pode apagar a antecedência
+                        // que alguém escolheu (ver `LembreteDoCompromisso`).
+                        // Mesmo desenho do campo de minutos: com o aviso
+                        // desligado o campo não entra no `FormData` e a lista
+                        // guardada fica intacta para quando alguém religar.
+                        ...(dados.get("reminder_enabled") === "on"
+                          ? {
+                              reminder_extra_offsets_minutes: lerDegrausExtras(
+                                String(dados.get("reminder_extra_offsets_minutes") ?? ""),
+                              ),
+                            }
+                          : {}),
+                        ...(dados.get("reminder_minutes_before")
+                          ? {
+                              reminder_minutes_before: Number(
+                                dados.get("reminder_minutes_before"),
+                              ),
+                            }
+                          : {}),
                       }),
                     "Tipo alterado.",
                   );
@@ -414,6 +583,7 @@ export function TiposDeAgendamentoClient({
                     ))}
                   </select>
                 </label>
+                <LembreteDoCompromisso tipo={tipo} />
                 <div className="flex justify-end sm:col-span-3">
                   <Button type="submit" size="sm" data-testid={`salvar-${tipo.id}`} disabled={salvando}>
                     {salvando ? t("Salvando…") : t("Salvar")}

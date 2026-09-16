@@ -1,3 +1,4 @@
+import { requireSupportWrite } from "@/lib/impersonate/support";
 /**
  * TIPOS DE AGENDAMENTO — criar, alterar e desativar pela API.
  *
@@ -17,6 +18,20 @@
  * DELETE aqui grava `is_active = false`: some da tela de marcar e continua
  * respondendo pelo passado. É o mesmo raciocínio do anti-pattern 7 da doutrina
  * (cascade fantasma).
+ *
+ * ─── E a volta mora AO LADO, não aqui ────────────────────────────────────
+ *
+ * Reativar é `POST /api/v1/agenda/tipos/reativar`. `is_active` está fora de
+ * `camposDoTipo` DE PROPÓSITO: aceitá-lo no PATCH deixaria o mesmo pedido que
+ * muda a duração poder desligar o tipo, e a trilha registraria a religada como
+ * `agenda.tipo_alterado { campos: ["is_active"] }` — indistinguível de uma
+ * alteração de campo qualquer.
+ *
+ * ⚠️ Essa exclusão é silenciosa e já custou: Zod DESCARTA chave desconhecida sem
+ * dizer nada, então o botão "Reativar" da tela mandou `is_active` para cá
+ * durante toda a vida dele e recebeu 422 "Nenhum campo para alterar." — uma
+ * recusa que não nomeia o que foi descartado. Quem vigia a travessia hoje é
+ * `tests/unit/agenda-reativar-tipo.test.ts`.
  */
 import { type NextRequest } from "next/server";
 import { z } from "zod";
@@ -26,6 +41,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { listaTiposDeAtendimento } from "@/lib/agenda/consulta";
+import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +74,75 @@ const camposDoTipo = {
   buffer_after_minutes: z.number().int().min(0).max(720).optional(),
   minimum_notice_minutes: z.number().int().min(0).max(43_200).optional(),
   booking_window_days: z.number().int().min(1).max(365).optional(),
+  /**
+   * O LEMBRETE — os dois campos que o cron `agenda-reminder` lê e que ninguém
+   * conseguia escrever.
+   *
+   * A 0177 criou as colunas, a 0194 as pôs em `default false` deixando escrito
+   * que ligar por padrão "fica com o dono do produto NO DIA em que o disparador
+   * nascer", e o `99c33257` fez o disparador nascer. Faltava a outra metade do
+   * par: `reminder_enabled` não estava em schema nenhum aqui nem na tela, então
+   * a rodada do cron devolvia zero linhas em TODA instalação — capacidade que
+   * existe e não tem como ser usada (invariante 6 do Sistema Vivo).
+   *
+   * **Continua nascendo desligado.** Não há `.default(true)`: quem não manda o
+   * campo não liga nada, e o default da coluna segue sendo `false`. Mandar
+   * mensagem para o telefone de um cliente é irreversível.
+   */
+  reminder_enabled: z.boolean().optional(),
+  /**
+   * ⚠️ ESTA FAIXA É MAIS ESTREITA QUE O CHECK DO BANCO, E ISSO CONTRARIA O
+   * PARÁGRAFO ACIMA DE PROPÓSITO.
+   *
+   * A coluna aceita `between 0 and 43200`, e os campos vizinhos copiam o CHECK
+   * porque lá a borda do banco É a borda do sentido: `buffer_after_minutes = 0`
+   * é "sem folga", uma configuração legítima. Aqui as duas bordas do CHECK
+   * produzem lembrete que não lembra:
+   *
+   * - **0 min** nunca sai. `estaNaHora` recusa `comeca <= agora`, então um
+   *   lembrete marcado para o próprio instante do compromisso é descartado em
+   *   toda rodada até a linha sair da varredura. O piso é 15 min porque o cron
+   *   roda a cada 5: abaixo de três ciclos, uma rodada atrasada come a
+   *   antecedência inteira e o aviso chega depois de a pessoa já ter saído.
+   * - **43200 min (30 dias)** não é lembrete, é convite. O teto é 10080 (7
+   *   dias), que cobre o "semana que vem" de clínica e imobiliária.
+   *
+   * A borda continua sendo do banco para quem escreve por SQL — aqui a recusa é
+   * só antes, com nome. Uma linha semeada fora desta faixa (só por SQL direto;
+   * o default da 0177 é 1440) segue valendo no banco e o cron a respeita: o que
+   * ela perde é poder ser reenviada por esta rota sem entrar na faixa.
+   */
+  reminder_minutes_before: z
+    .number()
+    .int()
+    .min(15, { message: "O lembrete precisa sair pelo menos 15 minutos antes do compromisso." })
+    .max(10_080, { message: "O lembrete não pode sair mais de 7 dias (10080 minutos) antes." })
+    .optional(),
+  /**
+   * Os degraus ADICIONAIS — o "e de novo três horas antes" que faltava.
+   *
+   * `reminder_minutes_before` continua sendo o degrau principal; estes somam a
+   * ele. Vazio é o comportamento anterior, um lembrete só, e por isso o campo
+   * não tem `.default()`: quem não manda não ganha aviso nenhum a mais.
+   *
+   * O teto de 3 é o mesmo do CHECK da 0241, e existe para que "lembrar" não
+   * vire "insistir". A faixa de cada degrau é a do principal, pelo mesmo motivo
+   * escrito acima dele: 0 min nunca sai e 30 dias não é lembrete, é convite.
+   */
+  reminder_extra_offsets_minutes: z
+    .array(
+      z
+        .number()
+        .int()
+        .min(15, { message: "O lembrete precisa sair pelo menos 15 minutos antes do compromisso." })
+        .max(10_080, { message: "O lembrete não pode sair mais de 7 dias (10080 minutos) antes." }),
+    )
+    .max(3, { message: "No máximo 3 lembretes adicionais por tipo." })
+    // Duplicata não é erro de quem preenche, é ruído: dois degraus iguais
+    // produziriam o mesmo aviso duas vezes se algum dia alguém lesse a lista
+    // sem deduplicar. Some aqui, uma vez, em vez de virar guarda em cada leitor.
+    .transform((v) => [...new Set(v)].sort((a, b) => b - a))
+    .optional(),
 };
 
 const criarSchema = z.object(camposDoTipo);
@@ -119,19 +204,33 @@ export async function GET(req: NextRequest): Promise<Response> {
       buffer_after_minutes: t.bufferDepoisMin,
       minimum_notice_minutes: t.antecedenciaMinimaMin,
       booking_window_days: t.janelaDeAgendamentoDias,
+      // Sem estes dois, quem chama a rota não tem como SABER se o lembrete está
+      // ligado — só como pedir que ligue. Um PATCH cego sobre um estado que a
+      // leitura não conta é o mesmo controle decorativo, do outro lado.
+      reminder_enabled: t.lembreteLigado,
+      reminder_minutes_before: t.lembreteAntecedenciaMin,
+      reminder_extra_offsets_minutes: t.lembreteDegrausExtras,
     })),
     { requestId },
   );
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = req.headers.get("x-request-id") ?? undefined;
   const autorizado = await requireRole("manager", { requestId, resource: "calendar_event_types" });
   if (!autorizado.ok) return autorizado.response;
+  const t = (texto: string) => traduzir(texto, autorizado.user.idioma);
 
   const lido = criarSchema.safeParse(await req.json().catch(() => ({})));
   if (!lido.success) {
-    return fail("validation_failed", lido.error.issues[0]?.message ?? "corpo inválido", 422, { requestId });
+    // A mensagem do Zod passa pelo dicionário, e não direto ao corpo da resposta:
+    // as recusas de `reminder_minutes_before` são escritas em português nesta
+    // rota, e quem opera em espanhol as receberia cruas. Texto sem entrada
+    // degrada para ele mesmo — que é o contrato de `traduzir`.
+    return fail("validation_failed", t(lido.error.issues[0]?.message ?? "corpo inválido"), 422, { requestId });
   }
 
   const admin = createAdminClient();
@@ -150,6 +249,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   await audit({
+    actorUserId: autorizado.user.id,
     action: "agenda.tipo_criado",
     organizationId: autorizado.org.orgId,
     resourceType: "calendar_event_types",
@@ -160,19 +260,25 @@ export async function POST(req: NextRequest): Promise<Response> {
 }
 
 export async function PATCH(req: NextRequest): Promise<Response> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = req.headers.get("x-request-id") ?? undefined;
   const autorizado = await requireRole("manager", { requestId, resource: "calendar_event_types" });
   if (!autorizado.ok) return autorizado.response;
+  const t = (texto: string) => traduzir(texto, autorizado.user.idioma);
 
   const lido = alterarSchema.safeParse(await req.json().catch(() => ({})));
   if (!lido.success) {
-    return fail("validation_failed", lido.error.issues[0]?.message ?? "corpo inválido", 422, { requestId });
+    // Idem ao POST: o dicionário na borda, para a recusa do lembrete chegar
+    // legível a quem opera em espanhol.
+    return fail("validation_failed", t(lido.error.issues[0]?.message ?? "corpo inválido"), 422, { requestId });
   }
   const { id, ...campos } = lido.data;
   if (Object.keys(campos).length === 0) {
     // Recusa em vez de UPDATE vazio: "alterei" sobre nada é a mesma família de
     // mentira que o "Marcado ✓" sem linha no banco.
-    return fail("validation_failed", "Nenhum campo para alterar.", 422, { requestId });
+    return fail("validation_failed", t("Nenhum campo para alterar."), 422, { requestId });
   }
 
   const admin = createAdminClient();
@@ -185,9 +291,10 @@ export async function PATCH(req: NextRequest): Promise<Response> {
     .maybeSingle();
 
   if (error) return fail("internal_error", error.message, 500, { requestId });
-  if (!data) return fail("not_found", "Tipo de agendamento não encontrado.", 404, { requestId });
+  if (!data) return fail("not_found", t("Tipo de agendamento não encontrado."), 404, { requestId });
 
   await audit({
+    actorUserId: autorizado.user.id,
     action: "agenda.tipo_alterado",
     organizationId: autorizado.org.orgId,
     resourceType: "calendar_event_types",
@@ -198,12 +305,16 @@ export async function PATCH(req: NextRequest): Promise<Response> {
 }
 
 export async function DELETE(req: NextRequest): Promise<Response> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = req.headers.get("x-request-id") ?? undefined;
   const autorizado = await requireRole("manager", { requestId, resource: "calendar_event_types" });
   if (!autorizado.ok) return autorizado.response;
+  const t = (texto: string) => traduzir(texto, autorizado.user.idioma);
 
   const lido = desativarSchema.safeParse(await req.json().catch(() => ({})));
-  if (!lido.success) return fail("validation_failed", "corpo inválido", 422, { requestId });
+  if (!lido.success) return fail("validation_failed", t("corpo inválido"), 422, { requestId });
 
   const admin = createAdminClient();
   const { data, error } = await admin
@@ -215,9 +326,10 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     .maybeSingle();
 
   if (error) return fail("internal_error", error.message, 500, { requestId });
-  if (!data) return fail("not_found", "Tipo de agendamento não encontrado.", 404, { requestId });
+  if (!data) return fail("not_found", t("Tipo de agendamento não encontrado."), 404, { requestId });
 
   await audit({
+    actorUserId: autorizado.user.id,
     action: "agenda.tipo_desativado",
     organizationId: autorizado.org.orgId,
     resourceType: "calendar_event_types",

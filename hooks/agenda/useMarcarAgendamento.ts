@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { showApiError } from "@/components/feedback/ApiErrorToast";
+import { useT } from "@/hooks/i18n/useT";
 import { apiClient } from "@/lib/api/client";
 
 export interface NovoAgendamento {
@@ -12,8 +13,14 @@ export interface NovoAgendamento {
   starts_at: string;
   owner_user_id?: string;
   contact_id?: string;
+  conversation_id?: string;
   title?: string;
   notes?: string;
+  /**
+   * Convidado externo. Vazio ou ausente cria o evento como sempre foi — sem
+   * `attendees` e sem convite nenhum saindo do Google.
+   */
+  guest_email?: string;
 }
 
 /**
@@ -30,6 +37,7 @@ export interface NovoAgendamento {
  * qualquer frase genérica — ela tem o nome do tipo e o motivo.
  */
 export function useMarcarAgendamento() {
+  const t = useT();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (novo: NovoAgendamento) => {
@@ -37,7 +45,7 @@ export function useMarcarAgendamento() {
     },
     onSuccess: () => {
       // Sem exclamação e sem emoji — anti-pattern declarado do design system.
-      toast.success("Agendamento criado.");
+      toast.success(t("Agendamento criado."));
       void qc.invalidateQueries({ queryKey: ["agenda"] });
     },
     onError: (err) => showApiError(err),

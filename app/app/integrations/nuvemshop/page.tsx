@@ -52,7 +52,7 @@ export default async function NuvemshopIntegrationPage() {
   const integration =
     activeOrg && configured ? await loadIntegration(activeOrg.orgId) : null;
 
-  const isAdmin = activeOrg?.role === "admin" || user?.is_platform_admin === true;
+  const isAdmin = activeOrg?.role === "admin" || (user?.is_platform_admin === true && !user.support);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">
@@ -78,12 +78,12 @@ export default async function NuvemshopIntegrationPage() {
             <CardTitle>{traduzir("Integração não configurada", idioma)}</CardTitle>
             <CardDescription>
               {traduzir("Configure", idioma)}{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-xs">NUVEMSHOP_APP_ID</code>,{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-xs">NUVEMSHOP_CLIENT_ID</code>{" "}
+              <code className="rounded-md bg-muted px-1 py-0.5 text-xs">NUVEMSHOP_APP_ID</code>,{" "}
+              <code className="rounded-md bg-muted px-1 py-0.5 text-xs">NUVEMSHOP_CLIENT_ID</code>{" "}
               {traduzir("e", idioma)}{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-xs">NUVEMSHOP_CLIENT_SECRET</code>{" "}
+              <code className="rounded-md bg-muted px-1 py-0.5 text-xs">NUVEMSHOP_CLIENT_SECRET</code>{" "}
               {traduzir("em", idioma)}{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-xs">.env.local</code>{" "}
+              <code className="rounded-md bg-muted px-1 py-0.5 text-xs">.env.local</code>{" "}
               {traduzir("para ativar a integração.", idioma)}
             </CardDescription>
           </CardHeader>

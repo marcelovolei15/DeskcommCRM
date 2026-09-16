@@ -45,7 +45,15 @@ export async function GET(req: NextRequest): Promise<Response> {
     .select("user_id");
 
   if (error) {
-    console.error("[attendant-heartbeat] sweep failed", error.message);
+    // `.message` sozinho escondeu a causa real numa falha em produção (2026-09-12):
+    // "column ... does not exist" com a coluna existindo no banco E no schema cache
+    // do PostgREST — só `code`/`details`/`hint` do PostgrestError contam a história.
+    console.error("[attendant-heartbeat] sweep failed", {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+    });
     return fail("internal_error", "Failed to sweep stale heartbeats.", 500, { requestId });
   }
 

@@ -1,3 +1,5 @@
+import type { ServiceBoundary } from "@/lib/atendimento/fronteira";
+import { assertServiceBoundarySupabase } from "@/lib/atendimento/origem";
 /**
  * Handoff orchestrator — central point que executa a transição bot→humano
  * para os 4 gatilhos OR-lógicos (G1/G2/G3/G4) do EPIC-06.
@@ -27,6 +29,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
 import { moverLeadParaEtapaDeHandoff } from "@/lib/leads/handoff-stage-move";
+import { decidirElegibilidadeDaConversaViaSupabase } from "@/lib/ai/elegibilidade/consulta-supabase";
+import { ttlDaAutorizacaoMs } from "@/lib/ai/elegibilidade/gate";
 
 import { avisarLeadDoCrm } from "./aviso-ao-lead";
 
@@ -49,6 +53,7 @@ export type HandoffReason =
   | "orcamento_de_ia";
 
 export interface TriggerHandoffInput {
+  serviceBoundary?: ServiceBoundary;
   conversationId: string;
   organizationId: string;
   reason: HandoffReason;
@@ -70,6 +75,13 @@ export async function triggerHandoff(
 ): Promise<TriggerHandoffResult> {
   try {
     const admin = createAdminClient();
+    const guard = async () => {
+      if (input.serviceBoundary) {
+        if (input.serviceBoundary.organization_id !== input.organizationId || input.serviceBoundary.conversation_id !== input.conversationId) throw new Error("service_scope_mismatch");
+        await assertServiceBoundarySupabase(admin, input.serviceBoundary);
+      }
+    };
+    await guard();
 
     // Idempotency check: se um handoff aconteceu há <5s pra esta conversa COM
     // a mesma reason, é provavelmente uma race entre G2/G3/G4 disparando em
@@ -100,6 +112,32 @@ export async function triggerHandoff(
       }
     }
 
+    // GATE DE ELEGIBILIDADE — só se passa bot→humano uma conversa que a IA
+    // PODERIA estar atendendo agora. Se `decidirElegibilidade` já diz não —
+    // porque o gate `allowlist` barra o contato (cliente antigo irritado →
+    // `low_sentiment` do worker de sentimento), OU porque já está de forma
+    // duradoura silenciada/em handoff/com dono humano —, NÃO há o que passar: disparar
+    // mandaria "um humano vai te atender" (às vezes de novo) e mexeria no
+    // estado de uma conversa que não é da IA. Fail-closed: erro de leitura →
+    // não dispara (o evento re-tenta).
+    try {
+      const elegib = await decidirElegibilidadeDaConversaViaSupabase(admin, {
+        organizationId: input.organizationId,
+        conversationId: input.conversationId,
+        agora: new Date(),
+        ttlMs: ttlDaAutorizacaoMs(process.env),
+      });
+      if (elegib !== null && !elegib.permite) {
+        return { triggered: false, reason: `nao_elegivel:${elegib.motivo}` };
+      }
+    } catch (err) {
+      logger.warn("[handoff] elegibilidade indeterminada — handoff não disparado", {
+        conversation_id: input.conversationId,
+        detail: err instanceof Error ? err.message.slice(0, 160) : "erro",
+      });
+      return { triggered: false, reason: "elegibilidade_indeterminada" };
+    }
+
     const nowIso = new Date().toISOString();
 
     // Step 0 — AVISA O LEAD. Antes de tudo, e este é o passo que faltava.
@@ -121,12 +159,14 @@ export async function triggerHandoff(
             conversationId: input.conversationId,
             contactId,
             reason: input.reason,
+            serviceBoundary: input.serviceBoundary,
           });
 
     // Step 1 — flip conversation to pending + silence bot indefinitely.
     // We use 'infinity' (Postgres timestamp special) so any later comparison
     // `bot_silenced_until > now()` is always true. supabase-js sends as text
     // and Postgres parses correctly for timestamptz columns.
+    await guard();
     const { error: updErr } = await admin
       .from("conversations")
       .update({
@@ -154,6 +194,7 @@ export async function triggerHandoff(
 
     // Step 2 — timeline activity (best-effort; missing leadId is OK).
     if (input.leadId) {
+      await guard();
       const { error: actErr } = await admin.from("crm_lead_activities").insert({
         organization_id: input.organizationId,
         lead_id: input.leadId,
@@ -179,10 +220,12 @@ export async function triggerHandoff(
       // Step 2.5 — best-effort: move o card para a etapa "chamar humano" do
       // pipeline dele, quando o tenant configurou uma (ver docstring do
       // arquivo). Nunca bloqueia nem derruba o handoff em si.
+      await guard();
       await moverLeadParaEtapaDeHandoff(admin, {
         organizationId: input.organizationId,
         leadId: input.leadId,
         reason: input.reason,
+        serviceBoundary: input.serviceBoundary,
       }).catch((err) => {
         logger.warn("[handoff-orchestrator] moverLeadParaEtapaDeHandoff failed", {
           lead_id: input.leadId,

@@ -5,6 +5,9 @@
  *  Wave 4 (S-13.04): +3 read (leads list/get, pipelines list)
  *                    +4 write (create_lead, update_lead, move_lead_stage, send_whatsapp)
  *                    +1 handoff (request_human_handoff). Total 13 tools.
+ *  +1 write (start_conversation_and_send): cold-start de conversa nova num
+ *  canal escolhido, pra automação externa com chave (`requiresRole: manager`,
+ *  `apenasHumano` no catálogo — nunca alcançável pelo agente publicado).
  */
 import type { McpToolDefinition } from "../types";
 import { TOOL_CATALOG, VALID_TOOL_IDS } from "./catalog";
@@ -23,6 +26,7 @@ import {
 } from "./leads";
 import { crmListPipelines } from "./pipelines";
 import { crmSendWhatsappMessage } from "./messages";
+import { crmStartConversationAndSend } from "./start-conversation";
 import {
   crmAssignConversation,
   crmManageTags,
@@ -135,6 +139,7 @@ export const allTools: ReadonlyArray<McpToolDefinition> = [
   crmUpdateLead,
   crmMoveLeadStage,
   crmSendWhatsappMessage,
+  crmStartConversationAndSend,
   crmAssignConversation,
   crmManageTags,
   // write — organizar a operação (W4)

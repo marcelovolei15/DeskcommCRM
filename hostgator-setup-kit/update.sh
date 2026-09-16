@@ -115,9 +115,13 @@ if [ -z "$SKIP_BACKUP" ]; then
   if bash "$(dirname "$0")/backup.sh"; then
     c_grn "✓ backup feito — se algo der errado, dá pra restaurar (restore.sh)."
   else
+    if [ -n "${DESKCOMM_AGENT_REPORT:-}" ] || [ ! -t 0 ]; then
+      die "O backup preventivo falhou. Atualização automática interrompida para proteger os dados."
+    fi
     c_ylw "⚠ o backup falhou. A atualização NÃO apaga dados (só reorganiza os contatos),"
-    c_ylw "  mas o ideal é ter backup. Ctrl+C pra parar e investigar; continuo em 8s…"
-    sleep 8
+    c_ylw "  mas o ideal é ter backup."
+    read -r -p "Deseja continuar MESMO SEM BACKUP? Digite 'CONTINUAR': " conf
+    [ "$conf" = "CONTINUAR" ] || die "Atualização cancelada pelo operador para investigar a falha do backup."
   fi
 fi
 # Avisa o agente do host (se for ele quem está dirigindo) — é o que faz a tela
@@ -181,8 +185,25 @@ fi
 #  - sem o token, o script imprimiria o passo manual — útil UMA vez, na
 #    instalação, e ruído em toda atualização a partir daí. Atualização que
 #    resmunga toda vez ensina a ignorar a saída dela.
+#
+# E sem o token, UMA vez na vida: quem instalou antes de a entrevista pedir o
+# token tem o Site URL do projeto em `localhost:3000` — o link de "esqueci minha
+# senha" leva a uma máquina que não existe fora do laptop de quem desenvolve.
+# Esse parque não é alcançado por nada: o `install.sh` dele não perguntou o
+# token, e o bloco acima só roda com token. Sem esta linha, a população
+# REALMENTE quebrada hoje nunca fica sabendo.
+#
+# Uma vez, e nunca mais — o marcador em disco garante isso, que é o que separa
+# um recado de um resmungo mensal. E o texto CONFERE, não acusa: quem já
+# configurou à mão está certo, e ler "seus e-mails estão quebrados" numa
+# atualização que correu bem seria alarme falso na cara de quem fez tudo certo.
+AVISO_SITE_URL=""
+MARCA_AVISO_SITE_URL="$PROJECT_DIR/.deskcomm-site-url-avisado"
 if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ]; then
   bash "$KIT_DIR/marca-emails.sh" --projeto "$PROJECT_DIR" || true
+  : > "$MARCA_AVISO_SITE_URL" 2>/dev/null || true   # o passo automático rodou
+elif [ ! -e "$MARCA_AVISO_SITE_URL" ]; then
+  AVISO_SITE_URL=1
 fi
 
 # ── 5. App novo ──────────────────────────────────────────────────────────────
@@ -214,6 +235,15 @@ export APP_IMAGE="${IMG_APP}:${VERSAO_ALVO}"
 export WORKER_IMAGE="${IMG_WORKER}:${VERSAO_ALVO}"
 export SCHEDULER_IMAGE="${IMG_SCHEDULER}:${VERSAO_ALVO}"
 gravar_imagens .env "$VERSAO_ALVO"
+
+# Os segredos da chamada de voz (spec 18), para quem instalou antes dela existir.
+# LACUNA apenas — chave presente, mesmo vazia, é decisão de quem opera. Isto NÃO
+# liga a feature: sem `voz` em COMPOSE_PROFILES o serviço nem é criado. O que
+# isto compra é o dia em que o dono QUISER ligar não começar por inventar dois
+# segredos num editor dentro da VPS, que é o passo manual que a doutrina de
+# packaging proíbe.
+VOZ_CRIADA="$(completar_segredos_da_voz .env)" || VOZ_CRIADA=""
+[ -n "$VOZ_CRIADA" ] && c_ylw "  (preparei as credenciais da chamada de voz no .env — ela segue DESLIGADA)"
 
 # `dc pull` falha se alguma das três imagens ainda não existir no registro — o
 # que acontece numa instalação atualizando para a primeira versão publicada
@@ -259,13 +289,16 @@ dc up -d
 # com o Traefik nas portas 80/443. O resultado era um "⚠ não consegui recriar o
 # proxy" em TODA atualização de quem usa proxy externo: alarme falso, num
 # momento em que o dono precisa confiar no que está lendo.
-if [ "${REVERSE_PROXY:-caddy}" = "traefik" ]; then
-  c_grn "✓ proxy externo (Traefik): o Caddy não é usado aqui — nada a recarregar"
-else
+case "${REVERSE_PROXY:-caddy}" in
+traefik|npm)
+  c_grn "✓ proxy externo (${REVERSE_PROXY}): o Caddy não é usado aqui — nada a recarregar"
+  ;;
+*)
   dc up -d --force-recreate --no-deps caddy >/dev/null 2>&1 \
     && c_grn "✓ proxy recarregado com a configuração desta versão" \
     || c_ylw "⚠ não consegui recriar o proxy — rode: docker compose $(dc_files) up -d --force-recreate caddy"
-fi
+  ;;
+esac
 
 # ── 6. O app voltou no ar? ───────────────────────────────────────────────────
 step "Conferindo se o app voltou no ar"
@@ -278,6 +311,30 @@ if [ -n "$ok" ]; then
   # e o worker seguia um canal móvel. Agora ele sabe que existiu e que acabou.
   if [ -n "$PIN_FALTANDO_ANTES" ]; then
     c_ylw "  (de quebra: a versão de $PIN_FALTANDO_ANTES estava solta e foi fixada agora)"
+  fi
+  # Dito aqui pelo mesmo motivo do pin: é no fim que o dono lê.
+  if [ -n "$AVISO_SITE_URL" ]; then
+    DOM_AVISO="$(printf '%s' "${NEXT_PUBLIC_APP_URL:-https://SEU_DOMINIO}")"
+    cat <<AVISO
+
+$(c_ylw "  ─── CONFIRA UMA COISA, UMA VEZ SÓ ─────────────────────")
+
+  Os e-mails de acesso (esqueci minha senha, confirmação de cadastro,
+  aceite de convite) levam para o endereço que estiver em Authentication
+  → URL Configuration, no painel do Supabase. Instalações feitas antes de
+  o instalador perguntar o token do Supabase ficaram com o padrão de
+  projeto novo, \`http://localhost:3000\`, que só existe na máquina de
+  quem desenvolve — e aí ninguém consegue redefinir a própria senha.
+
+  Vale conferir. Se já estiver com os valores abaixo, não há nada a fazer:
+
+       Site URL:       ${DOM_AVISO}
+       Redirect URLs:  ${DOM_AVISO%/}/auth/confirm
+
+  Este aviso não se repete — para o instalador cuidar disso sozinho, rode
+  o update com \`export SUPABASE_ACCESS_TOKEN=sbp_...\` no ambiente.
+AVISO
+    : > "$MARCA_AVISO_SITE_URL" 2>/dev/null || true
   fi
 else
   c_ylw "⚠ Atualizei, mas o app não respondeu 'ok'. Veja os logs:"

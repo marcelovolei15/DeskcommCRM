@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { Kanban } from "@/lib/ui/icons";
@@ -8,6 +9,7 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { FunisClient, type FunilDaLista } from "./_client";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Funis" };
 
 /**
  * A lista de funis — e o lugar onde eles se gerenciam.
@@ -36,13 +38,19 @@ export default async function KanbanPickerPage() {
   const supabase = await createClient();
   const { data } = await supabase
     .from("crm_pipelines")
-    .select("id, name, slug, description, position, is_default")
+    // `is_client_pipeline` entra: sem ela o selo "Clientes" não aparecia ao
+    // carregar a página e o botão sempre oferecia "Funil de clientes", mesmo no
+    // funil já marcado — só o corpo de um PATCH trazia a coluna.
+    .select("id, name, slug, description, position, is_default, is_client_pipeline")
     .eq("organization_id", activeOrg.orgId)
     .eq("is_archived", false)
     .order("position");
 
   const funis = (data ?? []) as FunilDaLista[];
   const podeGerenciar = ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager;
+  // Importar planilha é ESCRITA DE OPERAÇÃO, não configuração: quem atende
+  // sobe a lista que recebeu. Espelha o `requireRole("agent")` da rota.
+  const podeImportar = ROLE_RANK[activeOrg.role] >= ROLE_RANK.agent;
   const idioma = user.idioma;
   const t = (texto: string) => traduzir(texto, idioma);
 
@@ -60,7 +68,7 @@ export default async function KanbanPickerPage() {
         <h1 className="text-2xl font-semibold tracking-tight">{t("Funis")}</h1>
       </header>
 
-      <FunisClient funis={funis} podeGerenciar={podeGerenciar} />
+      <FunisClient funis={funis} podeGerenciar={podeGerenciar} podeImportar={podeImportar} />
     </div>
   );
 }

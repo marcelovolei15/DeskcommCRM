@@ -434,6 +434,30 @@ if [ ! -f "$EXEMPLO" ]; then
   printf '  — pulado: %s não existe (kit fora do repositório)\n' "$EXEMPLO"
 else
   GRAVA="$(grep -oE '^[[:space:]]*envq [A-Z_0-9]+' install.sh | awk '{print $2}' | sort -u)"
+  # VACUIDADE — a lista de escrita é a régua deste caso, e uma régua CURTA acusa
+  # o inocente. `$GRAVA` sai de um pipeline de três estágios; quando a máquina
+  # está saturada ele às vezes volta truncado, e o efeito não é um teste que
+  # falha em reconhecer o defeito: é um teste que INVENTA um, nomeando chaves que
+  # o install.sh grava na linha seguinte.
+  #
+  # Medido duas vezes com load average acima de 30, no mesmo dia e no mesmo
+  # arquivo: uma rodada acusou VAPID_PUBLIC_KEY, outra ANTHROPIC_API_KEY e
+  # WAHA_HMAC_SECRET — as três com `envq` presente no install.sh, e as duas
+  # rodadas seguintes verdes. Conjuntos diferentes a cada vez é a assinatura de
+  # régua truncada, não de defeito.
+  #
+  # O piso não precisa acompanhar o crescimento do install.sh: ele separa
+  # "pipeline morreu no meio" de "lista completa", e qualquer valor bem abaixo do
+  # real serve. Para ver quantas há hoje:
+  #   grep -cE '^[[:space:]]*envq [A-Z_0-9]+' hostgator-setup-kit/install.sh
+  n_grava="$(printf '%s\n' "$GRAVA" | grep -c . || true)"
+  if [ "${n_grava:-0}" -lt 30 ]; then
+    printf '  ✗ a lista de escrita voltou com %s chave(s) — a régua está truncada, não o install.sh\n' "${n_grava:-0}"
+    printf '     (cenário INCONCLUSIVO: sem régua inteira, toda acusação abaixo seria falsa)\n'
+    fail=1
+    GRAVA=""
+    novas=""
+  else
   novas=""
   for k in $(grep -oE '^[A-Z_0-9]+=' "$EXEMPLO" | tr -d '=' | sort -u); do
     printf '%s\n' "$GRAVA" | grep -qx "$k" && continue
@@ -446,6 +470,7 @@ else
     fail=1
   else
     printf '  ✓ nenhuma chave nova fora da lista de escrita\n'
+  fi
   fi
   estagnada=""
   for k in $DIVIDA; do
@@ -906,6 +931,40 @@ else
   printf '  ✗ Supabase próprio: rc=%s, mensagem sem GOTRUE_MAILER_TEMPLATES\n' "$rc_me"; fail=1
 fi
 
+# (2b) CONTRATO, e não é preferência de estilo: `GOTRUE_MAILER_TEMPLATES_*` só
+#      aceita URL http(s). O GoTrue COLA no fim do SITE_URL tudo o que não
+#      começa com `http` e busca por HTTP (supabase/auth v2.196.0,
+#      internal/mailer/templatemailer/template.go:456) — então um caminho de
+#      arquivo não dá erro: ele faz o GoTrue pedir `https://DOMINIO/opt/...`,
+#      receber o HTML da tela de login e mandar ISSO na caixa de entrada.
+#      Aconteceu numa instalação real em 2026-09-09 e o Gmail marcou como
+#      phishing. Varremos o kit inteiro porque três scripts imprimem estas
+#      linhas hoje (install.sh, marca-emails.sh, healthcheck.sh) e o quarto que
+#      aparecer não vai lembrar deste parágrafo.
+fora_do_contrato="$(grep -rhoE 'GOTRUE_MAILER_TEMPLATES_[A-Z]+=[^ "'"'"']*' ./*.sh \
+                    | grep -vE '=(https?://|\$\{[A-Za-z_]+:-https?://)' || true)"
+if [ -z "$fora_do_contrato" ]; then
+  printf '  ✓ todo GOTRUE_MAILER_TEMPLATES_* que o kit imprime é URL http(s)\n'
+else
+  printf '  ✗ o kit imprime GOTRUE_MAILER_TEMPLATES_* que NÃO é URL http(s):\n'
+  printf '%s\n' "$fora_do_contrato" | sed 's/^/      /'
+  fail=1
+fi
+
+# (2c) VACUIDADE do healthcheck: ele decide "o app serve o molde certo"
+#      procurando `token_hash={{ .TokenHash }}` na resposta da rota. Se o
+#      gerador do molde parar de emitir essa string, a sonda passa a responder
+#      "versão anterior à correção" para TODA instalação — inclusive as
+#      corretas —, e ninguém percebe, porque o aviso é plausível. Este caso
+#      amarra os dois lados.
+assinatura='token_hash={{ .TokenHash }}'
+if grep -qF "$assinatura" ./healthcheck.sh \
+   && grep -qF "$assinatura" ../lib/email/templates/acesso-gotrue.ts; then
+  printf '  ✓ a sonda do healthcheck procura a assinatura que o molde emite\n'
+else
+  printf '  ✗ healthcheck e lib/email/templates/acesso-gotrue.ts discordam da assinatura\n'; fail=1
+fi
+
 # (3) VACUIDADE: os modelos no disco precisam TER o placeholder, senão o caso
 #     (4) compararia a ausência de marca com a ausência de marca e passaria.
 for modelo in ../supabase/templates/confirmation.html ../supabase/templates/recovery.html; do
@@ -1144,6 +1203,41 @@ rt_ok "Traefik em 2 redes → a primeira"          coolify    coolify    "coolif
 # mata o `up -d` com "network host declared as external, but could not be found".
 rt_ok "modo host NÃO grava a pseudo-rede 'host'" crm_proxy  host       "host "           crm_proxy
 
+echo "proxy reverso: como o Traefik da hospedagem chama as portas 80 e 443"
+# `web`/`websecure` é convenção da documentação, não regra. O EasyPanel usa
+# `http`/`https`, e o Traefik ignora em SILÊNCIO um label que aponte para um
+# entrypoint inexistente: nenhum erro no log, a rota nunca nasce, o domínio cai
+# no 404 do painel. Medido numa VPS com EasyPanel — 6 contêineres no ar,
+# /api/v1/health saudável por dentro, site mudo por fora.
+ep_ok() {  # ep_ok <descrição> <esperado: "<http> <https>"> <env e args do contêiner>
+  local desc="$1" esperado="$2" real
+  real="$(entrypoints_do_traefik "${3:-}")"
+  if [ "$real" = "$esperado" ]; then printf '  ✓ %s\n' "$desc"
+  else printf '  ✗ %s  (deu [%s], esperava [%s])\n' "$desc" "$real" "$esperado"; fail=1; fi
+}
+# Env copiado do contêiner easypanel-traefik de uma VPS real.
+ep_ok "EasyPanel (env, http/https)" "http https" 'TRAEFIK_ENTRYPOINTS_HTTP_ADDRESS=:80
+TRAEFIK_ENTRYPOINTS_HTTPS_ADDRESS=:443
+TRAEFIK_PROVIDERS_DOCKER=true'
+# A grafia da documentação, que é como sobe quem segue o traefik.io.
+ep_ok "flags clássicas (web/websecure)" "web websecure" '--entrypoints.web.address=:80
+--entrypoints.websecure.address=:443'
+# camelCase é aceito pelo Traefik e aparece em tutorial antigo.
+ep_ok "flag em camelCase" "web websecure" '--entryPoints.web.address=:80
+--entryPoints.websecure.address=:443'
+# Endereço com IP: a porta continua sendo o que decide.
+ep_ok "address com IP explícito" "http https" '--entrypoints.http.address=0.0.0.0:80
+--entrypoints.https.address=0.0.0.0:443'
+# Nada reconhecido → vazio, e quem chama fica com o default. Sem isto, um Traefik
+# configurado por arquivo (que o inspect não vê) apagaria os nomes que funcionam.
+ep_ok "sem entrypoint declarado → vazio" " " 'TRAEFIK_PROVIDERS_DOCKER=true'
+# Só HTTPS declarado: o :443 é o que decide a rota do site, e o :80 fica no default.
+ep_ok "só o :443 declarado" " https" '--entrypoints.https.address=:443'
+# Entrypoint de outra coisa (métricas, dashboard) não vira o do site.
+ep_ok "porta alheia não vira entrypoint do site" "http https" '--entrypoints.metrics.address=:8082
+--entrypoints.http.address=:80
+--entrypoints.https.address=:443'
+
 echo "proxy reverso: a rede externa existe e serve?"
 vr_ok() {  # vr_ok <descrição> <esperado> <driver encontrado> <rede> <bridge do projeto> [attachable]
   local desc="$1" esperado="$2" real
@@ -1243,6 +1337,45 @@ STUB
 rede_e2e "overlay attachable: install/update seguem" segue overlay true
 rede_e2e "overlay sem attachable: morre explicando"  morre overlay false
 
+echo "proxy reverso: NPM (Nginx Proxy Manager)"
+# NPM nunca é auto-detectado (ao contrário do Traefik, ele não fala por labels) —
+# é sempre REVERSE_PROXY=npm escrito à mão no .env. O que precisa de prova é o
+# CALL SITE: dc()/dc_files() entram o override certo, e garantir_rede_do_proxy
+# não deixa o `up -d` morrer no erro opaco do compose quando a rede do NPM sumiu
+# (prune, down -v) — o mesmo risco que o Traefik já tinha, e o update.sh roda
+# sozinho pelo agent.sh, sem ninguém lendo a tela.
+if REVERSE_PROXY=npm dc_files | grep -q 'docker-compose.npm.yml'; then
+  printf '  ✓ dc_files() entra o docker-compose.npm.yml com REVERSE_PROXY=npm\n'
+else
+  printf '  ✗ dc_files() não entrou o docker-compose.npm.yml com REVERSE_PROXY=npm (deu: %s)\n' \
+    "$(REVERSE_PROXY=npm dc_files)"; fail=1
+fi
+if REVERSE_PROXY=caddy dc_files | grep -q 'docker-compose.npm.yml'; then
+  printf '  ✗ dc_files() entrou o docker-compose.npm.yml SEM REVERSE_PROXY=npm (vacuidade)\n'; fail=1
+else
+  printf '  ✓ REVERSE_PROXY=caddy (default): dc_files() não menciona o override do NPM\n'
+fi
+
+npm_rede_e2e() {  # npm_rede_e2e <descrição> <segue|morre> <rede existe: 0 ok, 1 sumiu>
+  local desc="$1" esperado="$2" existe="$3" dir real kit="$PWD"
+  dir="$(mktemp -d)"; mkdir -p "$dir/bin"
+  cat > "$dir/bin/docker" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/chamadas.log"
+[ "\$1" = network ] && [ "\$2" = inspect ] && exit $existe
+exit 0
+STUB
+  chmod +x "$dir/bin/docker"
+  if (cd "$dir" && env PATH="$dir/bin:$PATH" REVERSE_PROXY=npm PROJECT_DIR="$dir" \
+        bash -c '. "$1/_common.sh"; garantir_rede_do_proxy' _ "$kit") >/dev/null 2>&1
+  then real=segue; else real=morre; fi
+  rm -rf "$dir"
+  if [ "$real" = "$esperado" ]; then printf '  ✓ %s\n' "$desc"
+  else printf '  ✗ %s  (deu %s, esperava %s)\n' "$desc" "$real" "$esperado"; fail=1; fi
+}
+npm_rede_e2e "rede do NPM presente: install/update seguem"        segue 0
+npm_rede_e2e "rede do NPM sumiu (prune/down -v): morre explicando" morre 1
+
 echo "proxy reverso: quanta confiança a eleição merece"
 # A eleição por porta publicada traz a evidência (a coluna Ports diz ':80->'); a
 # varredura por modo host não traz nenhuma — em modo host a coluna é vazia para
@@ -1291,7 +1424,11 @@ montar_vps() {
   local raiz="$1" pasta="$2"
   VPS_RAIZ="$raiz"; VPS_PROJ="$raiz/$pasta"; VPS_LOG="$raiz/docker.log"
   mkdir -p "$raiz/bin" "$VPS_PROJ"
-  cp install.sh update.sh backup.sh _common.sh "$raiz/"
+  # `marca-emails.sh` entra porque o install.sh o INVOCA no fim (passo 7). Sem
+  # ele no sandbox, aquele `bash` falhava, o `|| true` engolia, e todo cenário
+  # media uma instalação em que o passo dos e-mails de acesso simplesmente não
+  # aconteceu — o elo mais fácil de quebrar sem ninguém ver.
+  cp install.sh update.sh backup.sh _common.sh marca-emails.sh "$raiz/"
   : > "$VPS_PROJ/docker-compose.prod.yml"
   cat > "$raiz/bin/docker"
   # Só o v_supabase_url exige resposta online (000 reprova); os outros toleram.
@@ -1407,16 +1544,17 @@ chegou_na_deteccao() {
 #   printf '%s' "${RESTO_DAS_PERGUNTAS%%c*}" | grep -c ''
 # → era 9 antes de APP_ACCENT_HEX entrar em FIELDS, 10 depois dela, e é 11
 #   desde que APP_LOCALE (o idioma da instalação) entrou logo após APP_NAME.
-RESTO_DAS_PERGUNTAS=$'\n\n\n\n\n\n\n\n\n\n\nc\n'
+RESTO_DAS_PERGUNTAS=$'\n\n\n\n\n\n\n\n\n\n\n\nc\n'
 
-# A posição da cor DENTRO da fila acima — 1 provedor + APP_IMAGE + OPENAI +
-# APP_NAME + APP_LOCALE e ela é a 6ª. Fica numa variável porque a fila com a cor RESPONDIDA
+# A posição da cor DENTRO da fila acima — SUPABASE_ACCESS_TOKEN + 1 provedor +
+# APP_IMAGE + OPENAI + APP_NAME + APP_LOCALE e ela é a 7ª. Fica numa variável porque a fila com a cor RESPONDIDA
 # (abaixo) é DERIVADA da de cima em vez de copiada: duas filas posicionais
 # mantidas à mão desincronizam no primeiro campo novo, e aí uma passa e a outra
 # reprova com um nome que não é o dela.
-POSICAO_DA_COR=6
-# O idioma vem logo antes da cor: 1 provedor + APP_IMAGE + OPENAI + APP_NAME.
-POSICAO_DO_IDIOMA=5
+POSICAO_DA_COR=7
+# O idioma vem logo antes da cor: SUPABASE_ACCESS_TOKEN + 1 provedor + APP_IMAGE
+# + OPENAI + APP_NAME.
+POSICAO_DO_IDIOMA=6
 COR_DE_TESTE='#f2c94c'
 # fila_com <fila> <posição> <valor> → a mesma fila, com uma resposta no lugar de
 # um Enter. `awk` porque a substituição é por NÚMERO DE LINHA: um `sed s///`
@@ -1813,6 +1951,106 @@ provedor_ok "OpenAI: instala e o .env sai inteiro"      OPENAI_API_KEY     sk-te
 provedor_ok "Anthropic: instala e o .env sai inteiro"   ANTHROPIC_API_KEY  sk-ant-teste   anthropic
 
 
+echo "integração: instalar SEM chave de IA — o caminho que a documentação prometia (issue #670)"
+# A issue #670: `docs/deploy-selfhost` promete "deixe vazio e cadastre a chave
+# depois em IA › Credenciais", e o runtime concorda — `lib/env.ts` trata as três
+# chaves como opcionais, e faltar todas é `warn`, não erro. O instalador, não:
+# exigia uma chave que PASSASSE numa chamada real ao provedor, e a instalação
+# inteira parava sem ela. Não havia caminho para subir o produto sem antes abrir
+# conta num provedor de IA.
+#
+# O que este cenário mede é o caminho inteiro, com o .env de quem não tem conta
+# em provedor nenhum: BASE_ENV sem as três chaves e sem o AI Gateway (que tem
+# precedência na resolução do chat). Com o campo de volta a obrigatório, o
+# `ask_one` morre em "Falta ANTHROPIC_API_KEY (modo --yes exige .env
+# preenchido)" na coleta de configuração, e é a PRIMEIRA asserção que fica
+# vermelha.
+TMP_SEM_IA="$(mktemp -d)"
+(
+  montar_vps "$TMP_SEM_IA" "crmsemia" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  mkdir -p "$VPS_PROJ/supabase"; : > "$VPS_PROJ/supabase/baseline.sql"
+
+  # O .env da entrevista pulada: BASE_ENV sem NENHUMA chave de IA.
+  printf '%s\n' "$BASE_ENV" \
+    | grep -vE '^(ANTHROPIC|OPENROUTER|OPENAI)_API_KEY=|^AI_GATEWAY_API_KEY=' > "$VPS_PROJ/.env"
+
+  rodar_sem_ia() {
+    : > "$VPS_LOG"
+    (cd "$VPS_PROJ" && env PATH="$VPS_RAIZ/bin:$PATH" DOCKER_LOG="$VPS_LOG" \
+      CRONTAB_SANDBOX="$CRONTAB_SANDBOX" SUPABASE_ACCESS_TOKEN= \
+      bash "$VPS_RAIZ/install.sh" --yes 2>&1 || true) | sed -E 's/\x1b\[[0-9;]*m//g'
+  }
+
+  saida="$(rodar_sem_ia)"
+
+  # A marca do defeito: com o campo obrigatório, o instalador morre aqui.
+  if printf '%s' "$saida" | grep -q 'exige .env preenchido'; then
+    printf '  ✗ o instalador ainda morre sem chave de IA — o campo do provedor não é `opcional`\n'
+    printf '     %s\n' "$(printf '%s' "$saida" | grep -m1 'exige .env preenchido')"
+    exit 1
+  fi
+  # CONTROLE POSITIVO: "não morreu" só significa alguma coisa se a instalação
+  # chegou ao fim; sem esta âncora, um install que parasse antes passaria.
+  if ! printf '%s' "$saida" | grep -q 'Instalação concluída'; then
+    printf '  ✗ a instalação sem chave de IA não chegou à tela final — cenário inconclusivo, não verde\n'
+    printf '     última linha: %s\n' "$(printf '%s' "$saida" | grep -v '^$' | tail -1)"
+    exit 1
+  fi
+  # O .env sai INTEIRO: sem chave, a última linha do bloco continua presente —
+  # a mesma régua dos cenários de provedor acima.
+  if ! grep -qE '^OWNER_PASSWORD="' "$VPS_PROJ/.env"; then
+    printf '  ✗ o .env saiu pela metade na instalação sem chave de IA\n'
+    printf '     últimas chaves gravadas: %s\n' \
+      "$(grep -oE '^[A-Z_]+=' "$VPS_PROJ/.env" | tail -3 | tr '\n' ' ')"
+    exit 1
+  fi
+  # A chave que ninguém respondeu sai DECLARADA e vazia — a mesma distinção
+  # entre ausente e declarada-e-vazia que o caso do APP_ACCENT_HEX guarda.
+  if ! grep -qE '^ANTHROPIC_API_KEY=' "$VPS_PROJ/.env"; then
+    printf '  ✗ ANTHROPIC_API_KEY nem apareceu no .env (esperado: declarada e vazia)\n'; exit 1
+  fi
+  if [ -n "$(valor_no_env "$VPS_PROJ/.env" ANTHROPIC_API_KEY)" ]; then
+    printf '  ✗ ANTHROPIC_API_KEY veio com valor [%s] — ninguém digitou nada\n' \
+      "$(valor_no_env "$VPS_PROJ/.env" ANTHROPIC_API_KEY)"; exit 1
+  fi
+  # A TELA FINAL lembra o caminho de volta. A medição é no RABO (depois de
+  # "Instalação concluída"), como no caso do Site URL: é a única tela que a
+  # pessoa lê inteira, e um aviso no meio do log de dez minutos não conta.
+  rabo="${saida##*Instalação concluída}"
+  if ! printf '%s' "$rabo" | grep -q 'A IA ainda não atende'; then
+    printf '  ✗ a tela final não avisa que a IA ainda não atende\n'; exit 1
+  fi
+  if ! printf '%s' "$rabo" | grep -q 'IA › Credenciais'; then
+    printf '  ✗ o aviso da tela final não diz ONDE cadastrar a chave (IA › Credenciais)\n'; exit 1
+  fi
+  printf '  ✓ sem chave de IA: instala, .env inteiro, e a tela final dá o caminho de volta\n'
+
+  # ── O outro lado: com a chave, o aviso NÃO aparece ────────────────────────
+  # Sem isto, um `pendencia_da_ia` que imprimisse sempre passaria no caso acima
+  # e viraria ruído em toda instalação que já tem chave — inclusive nas rodadas
+  # de `provedor_ok` logo acima.
+  printf '%s\n' "$BASE_ENV" > "$VPS_PROJ/.env"
+  saida="$(rodar_sem_ia)"
+  if ! printf '%s' "$saida" | grep -q 'Instalação concluída'; then
+    printf '  ✗ (controle) a segunda rodada, com chave, não chegou à tela final — cenário inconclusivo\n'
+    exit 1
+  fi
+  rabo="${saida##*Instalação concluída}"
+  if printf '%s' "$rabo" | grep -q 'A IA ainda não atende'; then
+    printf '  ✗ com a chave presente, a tela final avisou que falta chave de IA\n'; exit 1
+  fi
+  printf '  ✓ com a chave presente, o lembrete não aparece (o aviso não é ruído permanente)\n'
+) || fail=1
+rm -rf "$TMP_SEM_IA"
+
+
 echo "integração: instalação NOVA numa VPS com Traefik em modo host"
 # O install.sh roda contra um `docker` dublê que imita a Hostinger: 80/443
 # ocupadas, NINGUÉM publicando, um Traefik em `--network host`, e a rede do
@@ -1838,7 +2076,14 @@ case "$1" in
   # Ninguém publica porta; o Traefik só aparece filtrando por rede host.
   ps)      for a in "$@"; do [ "$a" = "network=host" ] && em_host=1; done
            [ "${em_host:-0}" = 1 ] && printf 'traefik-hostinger|hostinger|traefik:v3.3|\n'; exit 0 ;;
-  inspect) case "$*" in *NetworkMode*) printf 'host\n';; *Networks*) printf 'host \n';; esac; exit 0 ;;
+  # Config.Env é a leitura dos entrypoints. Este Traefik chama as portas de
+  # `http`/`https` (como o EasyPanel), e NÃO de web/websecure: é o que separa
+  # "leu a configuração do proxy" de "repetiu o default da documentação".
+  inspect) case "$*" in
+             *Config.Env*)  printf 'TRAEFIK_ENTRYPOINTS_HTTP_ADDRESS=:80\nTRAEFIK_ENTRYPOINTS_HTTPS_ADDRESS=:443\n';;
+             *NetworkMode*) printf 'host\n';;
+             *Networks*)    printf 'host \n';;
+           esac; exit 0 ;;
   # Instalação nova: a rede do projeto ainda NÃO existe.
   network) case "$2" in inspect) exit 1 ;; esac; exit 0 ;;
 esac
@@ -1893,6 +2138,17 @@ STUB
     exit 1
   fi
   printf '  ✓ confirmando "s": cria a bridge e grava a rede com o nome que o compose usa\n'
+
+  # O label com um entrypoint que não existe não dá erro: o Traefik ignora a rota
+  # e o domínio cai no 404 do painel, com a instalação toda verde. Por isso os
+  # nomes têm de vir do proxy encontrado, e não do default da documentação.
+  if ! grep -qx 'TRAEFIK_ENTRYPOINT="https"' "$PROJ/.env" \
+     || ! grep -qx 'TRAEFIK_ENTRYPOINT_HTTP="http"' "$PROJ/.env"; then
+    printf '  ✗ os entrypoints do .env não são os do Traefik encontrado (http/:80, https/:443):\n'
+    printf '     %s\n' "$(grep -E '^TRAEFIK_ENTRYPOINT' "$PROJ/.env" | tr '\n' ' ' || echo '(ausentes)')"
+    exit 1
+  fi
+  printf '  ✓ os entrypoints gravados são os que o Traefik da hospedagem declara\n'
 
   saida="$(rodar install.sh "" "" "n${RESTO_DAS_PERGUNTAS}")"
   chegou_na_deteccao || exit 1
@@ -2223,6 +2479,59 @@ NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
 ) || fail=1
 rm -rf "$TMP_DDL_C"
 
+echo "e-mails de acesso: quem JÁ instalou também é avisado — uma vez só"
+# A população realmente quebrada hoje é quem instalou ANTES de a entrevista pedir
+# o token: o Site URL do projeto dela está em `localhost:3000` e nada a alcança.
+# O `install.sh` dela não perguntou nada, e o bloco de e-mails do `update.sh` só
+# roda COM token — então a atualização passava calada por cima do defeito.
+#
+# As DUAS metades são medidas aqui, e a segunda é a que impede o conserto de
+# virar um resmungo mensal: avisa na primeira atualização, e nunca mais.
+TMP_AVISO="$(mktemp -d)"
+(
+  montar_vps "$TMP_AVISO" "crmaviso" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  mkdir -p "$VPS_PROJ/supabase"; : > "$VPS_PROJ/supabase/baseline.sql"
+  (cd "$VPS_PROJ" && git init -q -b main . \
+    && git -c user.email=t@exemplo -c user.name=teste add -A \
+    && git -c user.email=t@exemplo -c user.name=teste commit -qm base \
+    && git tag v9.9.9) >/dev/null 2>&1
+
+  extra="INTERNAL_SECRET='segredo-de-teste'
+NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'"
+  # Sem token — o estado de quem instalou pelo caminho documentado.
+  unset SUPABASE_ACCESS_TOKEN
+  um="$(rodar update.sh "" "$extra")"
+  dois="$(rodar update.sh "" "$extra")"
+
+  # CONTROLE POSITIVO: sem chegar ao fim, a ausência do aviso não mede nada.
+  if ! printf '%s' "$um" | grep -q 'Atualização concluída'; then
+    printf '  ✗ o update.sh não chegou ao fim — cenário inconclusivo, não verde\n'
+    printf '     última linha: %s\n' "$(printf '%s' "$um" | sed -E 's/\x1b\[[0-9;]*m//g' | grep -v '^$' | tail -1)"
+    exit 1
+  fi
+  if ! printf '%s' "$um" | grep -q 'URL Configuration'; then
+    printf '  ✗ a 1ª atualização passou calada pelo Site URL — quem já instalou não fica sabendo\n'
+    printf '     (o Site URL dele está em localhost:3000 e ninguém consegue redefinir a senha)\n'
+    exit 1
+  fi
+  # O domínio PREENCHIDO, não um placeholder.
+  if ! printf '%s' "$um" | grep -q 'https://crm.exemplo.com.br/auth/confirm'; then
+    printf '  ✗ o aviso não traz o domínio preenchido — quem lê não sabe o que escrever\n'; exit 1
+  fi
+  if printf '%s' "$dois" | grep -q 'URL Configuration'; then
+    printf '  ✗ a 2ª atualização repetiu o aviso — atualização que resmunga ensina a ignorar a saída\n'; exit 1
+  fi
+  printf '  ✓ a 1ª atualização avisa (com o domínio preenchido) e a 2ª fica calada\n'
+) || fail=1
+rm -rf "$TMP_AVISO"
+
 echo "DDL: nenhum script do kit manda a string do APP para o Postgres"
 # A guarda de CLASSE. Os três cenários acima provam o install.sh e o update.sh
 # pelo comportamento; esta linha alcança os irmãos que nenhuma fixture roda
@@ -2300,6 +2609,84 @@ NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
   printf '  ✓ o update.sh recria a bridge do proxy antes de subir a stack\n'
 ) || fail=1
 rm -rf "$TMP6"
+
+echo "integração: update.sh quando a rede do NPM sumiu"
+# NPM nunca é "nossa" bridge — ninguém cria de novo, só morre explicando ANTES
+# do `up -d`, em vez do opaco "network X declared as external, but could not
+# be found" (o mesmo cuidado que o Traefik já tinha, agora pro segundo proxy
+# que não fala por labels).
+TMP7="$(mktemp -d)"
+(
+  montar_vps "$TMP7" "crmupdatenpm" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+  network) case "$2" in inspect) exit 1 ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  (cd "$VPS_PROJ" && git init -q -b main . \
+    && git -c user.email=t@exemplo -c user.name=teste add -A \
+    && git -c user.email=t@exemplo -c user.name=teste commit -qm base \
+    && git tag v9.9.9) >/dev/null 2>&1
+
+  saida="$(rodar update.sh --skip-backup "REVERSE_PROXY='npm'
+PROXY_NETWORK_NAME='proxy_network'
+INTERNAL_SECRET='segredo-de-teste'
+NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'")"
+
+  if grep -q -E '^compose .* up -d$' "$VPS_LOG"; then
+    printf '  ✗ o update.sh subiu a stack mesmo com a rede do NPM ausente\n'; exit 1
+  fi
+  if ! printf '%s' "$saida" | grep -q 'PROXY_NETWORK_NAME'; then
+    printf '  ✗ a morte não ensina a saída (PROXY_NETWORK_NAME no .env)\n'
+    printf '     saída: %s\n' "$(printf '%s' "$saida" | tail -3)"; exit 1
+  fi
+  printf '  ✓ o update.sh para ANTES do "up -d" e ensina a saída\n'
+) || fail=1
+rm -rf "$TMP7"
+
+echo "integração: update.sh com proxy externo nunca recria o Caddy sozinho"
+# `up -d --force-recreate --no-deps caddy` NOMEIA o serviço — e nomear um
+# serviço ATIVA o profile dele no Compose mesmo com o override presente (é o
+# mesmo defeito que o docker-compose.traefik.yml já documenta). Com um segundo
+# proxy (Traefik OU NPM) já nas portas 80/443, isso sobe um Caddy que bate de
+# frente com ele. A checagem por CADA valor evita que só o Traefik continue
+# coberto e o NPM (o proxy novo) reproduza o defeito que motivou o guard.
+caddy_skip_e2e() {  # caddy_skip_e2e <descrição> <REVERSE_PROXY> <linha extra do .env> <deve tentar recriar: sim|nao>
+  local desc="$1" rp="$2" extra="$3" esperado="$4" dir tentou
+  dir="$(mktemp -d)"
+  (
+    montar_vps "$dir" "crmcaddyskip" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+    (cd "$VPS_PROJ" && git init -q -b main . \
+      && git -c user.email=t@exemplo -c user.name=teste add -A \
+      && git -c user.email=t@exemplo -c user.name=teste commit -qm base \
+      && git tag v9.9.9) >/dev/null 2>&1
+    rodar update.sh --skip-backup "REVERSE_PROXY='${rp}'
+${extra}
+INTERNAL_SECRET='segredo-de-teste'
+NEXT_PUBLIC_APP_URL='https://crm.exemplo.com.br'" >/dev/null
+    if grep -qF -- '--force-recreate --no-deps caddy' "$VPS_LOG"; then
+      tentou=sim
+    else
+      tentou=nao
+    fi
+    if [ "$tentou" = "$esperado" ]; then printf '  ✓ %s\n' "$desc"
+    else printf '  ✗ %s  (tentou recriar: %s, esperado: %s)\n' "$desc" "$tentou" "$esperado"; exit 1; fi
+  ) || fail=1
+  rm -rf "$dir"
+}
+caddy_skip_e2e "caddy (default): recria o próprio proxy"       caddy   ""                                          sim
+caddy_skip_e2e "traefik: nunca recria o Caddy"                  traefik "TRAEFIK_NETWORK='crmcaddyskip_proxy'"      nao
+caddy_skip_e2e "npm: nunca recria o Caddy"                      npm     "PROXY_NETWORK_NAME='proxy_network'"       nao
 
 echo "nome do projeto que o docker compose usa"
 # O compose faz TrimLeft("_-") no basename. Sem isso, uma pasta /root/_deskcomm
@@ -2396,6 +2783,33 @@ reexec_neg() {
 reexec_neg
 reexec_ok "o bloco de variáveis conhecidas acha o kit depois do cd"
 
+echo "cron numa VPS sem crontab nenhum (#715)"
+# VPS nova não tem crontab para o root: `crontab -l` sai 1. As rodadas acima
+# nunca mediram isso, porque o sandbox já tinha linhas quando elas agendavam — e
+# o install.sh morria em "Ativando as automações" em toda VPS recém-criada. As
+# duas funções rodam aqui sob o MESMO `set -euo pipefail` do install.sh, com o
+# dublê de crontab apontado para um arquivo que não existe.
+cron_vazio() (
+  # Subshell: `montar_vps` define VPS_* globais, e os blocos seguintes da suíte
+  # não podem herdar esta fixture.
+  montar_vps "$SUITE_TMP/cron-vazio" projeto < <(printf '#!/bin/sh\nexit 0\n')
+  local sandbox="$SUITE_TMP/crontab-vazio.txt"; rm -f "$sandbox"
+  local out rc
+  out="$(cd "$VPS_PROJ" && env PATH="$VPS_RAIZ/bin:$PATH" CRONTAB_SANDBOX="$sandbox" \
+    INTERNAL_SECRET=segredo-de-teste NEXT_PUBLIC_APP_URL=https://crm.exemplo.com.br PROJECT_DIR="$VPS_PROJ" \
+    bash -c 'set -euo pipefail; . "$1/_common.sh"; psql_run() { :; }
+             setup_event_log_drain_cron; setup_update_agent_cron; echo CHEGOU-AO-FIM' _ "$VPS_RAIZ" 2>&1)" \
+    && rc=0 || rc=$?
+  if [ $rc -ne 0 ] || ! printf '%s' "$out" | grep -q CHEGOU-AO-FIM; then
+    printf '  ✗ agendar o cron numa VPS sem crontab derrubou o script (saída %s)\n' "$rc"; return 1
+  fi
+  if [ "$(grep -c '# deskcomm:' "$sandbox" 2>/dev/null)" != 2 ]; then
+    printf '  ✗ esperava 2 linhas (drain + agente) no crontab, veio %s\n' "$(grep -c '# deskcomm:' "$sandbox" 2>/dev/null || echo 0)"; return 1
+  fi
+  printf '  ✓ sem crontab prévio, drain e agente agendados e o script segue\n'
+)
+cron_vazio || fail=1
+
 echo "isolamento: a suíte não escreve no crontab da máquina"
 # Isto não é hipótese defensiva: os testes JÁ escreveram 10 linhas órfãs no
 # crontab do mantenedor, uma delas um `curl` com Bearer disparando a cada minuto
@@ -2419,6 +2833,250 @@ elif ! cmp -s "$CRONTAB_REAL_ANTES" "$CRONTAB_REAL_DEPOIS"; then
 else
   printf '  ✓ o kit agendou %s linha(s) — todas no sandbox, o crontab real intacto\n' \
     "$(grep -c '# deskcomm:' "$CRONTAB_SANDBOX")"
+fi
+
+# ───────────────────────────────────────────────────────────────────────────
+# A URL DOS E-MAILS DE ACESSO — a pendência aparece na TELA FINAL (#431/#426)
+# ───────────────────────────────────────────────────────────────────────────
+#
+# Sem `SUPABASE_ACCESS_TOKEN`, o Site URL do projeto Supabase fica em
+# `localhost:3000`, e o link de "esqueci minha senha" leva a uma máquina que não
+# existe fora do laptop de quem desenvolve. O `marca-emails.sh` já avisava — no
+# meio de um log de dez minutos, ~200 linhas antes de uma tela verde escrita
+# "Instalação concluída!". Ninguém volta para ler.
+#
+# O que este cenário mede é a TELA FINAL: ela tem de nomear o passo que falta e
+# trazer o domínio já preenchido, para o dono resolver sem procurar nada.
+TMP_URL_EMAIL="$(mktemp -d)"
+(
+  montar_vps "$TMP_URL_EMAIL" "crmurl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case "$1" in
+  compose) case "$*" in *" exec "*) printf 'healthy\n{"data":{"status":"healthy"}}\n' ;; esac; exit 0 ;;
+esac
+exit 0
+STUB
+  mkdir -p "$VPS_PROJ/supabase"; : > "$VPS_PROJ/supabase/baseline.sql"
+  # O estado de TODA instalação feita pelo caminho documentado: sem o token.
+  unset SUPABASE_ACCESS_TOKEN
+  saida="$(rodar install.sh --yes)"
+
+  # CONTROLE POSITIVO: se a instalação nem chegou ao fim, a ausência do bloco
+  # abaixo não significa nada — seria sonda cega lida como aprovação.
+  if ! printf '%s' "$saida" | grep -q "Instalação concluída"; then
+    printf '  ✗ a instalação não chegou à tela final — cenário inconclusivo, não verde\n'; exit 1
+  fi
+
+  # ⚠ A MEDIÇÃO É SOBRE O QUE VEM DEPOIS DA TELA FINAL, e isso não é detalhe.
+  # O `marca-emails.sh` já imprime "URL Configuration" e o domínio ~200 linhas
+  # ANTES — que é justamente o problema desta issue. Procurar essas strings na
+  # saída INTEIRA aprova o defeito: medido, com o bloco novo removido o cenário
+  # ficava verde. Só o rabo da saída distingue "avisou onde ninguém lê" de
+  # "avisou onde a pessoa está olhando".
+  rabo="${saida##*Instalação concluída}"
+  faltou=""
+  printf '%s' "$rabo" | grep -q "URL Configuration" || faltou="${faltou} URL-Configuration"
+  printf '%s' "$rabo" | grep -q "Site URL" || faltou="${faltou} Site-URL"
+  # O domínio PREENCHIDO, não um placeholder: quem instala não deve ter de
+  # descobrir qual endereço escrever.
+  printf '%s' "$rabo" | grep -q "https://crm.exemplo.com.br/auth/confirm" \
+    || faltou="${faltou} Redirect-URL-com-o-dominio"
+  if [ -n "$faltou" ]; then
+    printf '  ✗ a tela final não avisa o que falta para os e-mails de acesso funcionarem:%s\n' "$faltou"
+    printf '     (sem isso, ninguém consegue redefinir a própria senha e o dono não sabe por quê)\n'
+    exit 1
+  fi
+  printf '  ✓ a tela final repete a pendência do Site URL, com o domínio preenchido\n'
+) || fail=1
+
+# A entrevista PERGUNTA o token — senão o caminho automático nunca é alcançado
+# por quem segue o README, e a pendência acima seria permanente.
+if ! grep -q 'SUPABASE_ACCESS_TOKEN|' ./install.sh; then
+  printf '  ✗ a entrevista do install.sh não pergunta o SUPABASE_ACCESS_TOKEN\n'
+  printf '     (sem ele o marca-emails.sh sai calado e o Site URL fica em localhost)\n'
+  fail=1
+elif grep -qE '^\s*envq SUPABASE_ACCESS_TOKEN' ./install.sh; then
+  # Ele abre a Management API, que cria e apaga projetos. Guardá-lo numa VPS
+  # trocaria um bug de primeira impressão por um passivo de segurança.
+  printf '  ✗ o SUPABASE_ACCESS_TOKEN está sendo gravado no .env — ele é token de CONTA\n'
+  fail=1
+else
+  printf '  ✓ a entrevista pergunta o token e não o guarda no .env\n'
+fi
+
+# ───────────────────────────────────────────────────────────────────────────
+# O ✓ VERDE DOS E-MAILS TEM DE PROVAR O SITE URL, não só os modelos
+# ───────────────────────────────────────────────────────────────────────────
+#
+# `marca-emails.sh` declarava sucesso relendo o MARCADOR — que prova os MODELOS
+# e nada mais. O `site_url` viaja no MESMO PATCH e pode não pegar: a API aceita e
+# ignora (o cabeçalho do próprio script adverte contra isso), ou o passo 4
+# preserva de propósito um Site URL que o operador escolheu. Nos dois casos saía
+# "✓ configurados e CONFERIDOS", exit 0, NENHUMA pendência escrita — e a tela
+# final da instalação ficava muda enquanto o link do "esqueci minha senha"
+# continuava levando para outro lugar. Falha em verde, que é a pior.
+#
+# O dublê de `curl` reproduz exatamente isso: devolve o que o PATCH mandou (logo,
+# COM o marcador — o caminho verde é alcançado de verdade) e força o `site_url`
+# de volta para outro domínio.
+TMP_SITEURL="$(mktemp -d)"
+(
+  KIT_AQUI="$PWD"
+  cp "$KIT_AQUI/marca-emails.sh" "$KIT_AQUI/_common.sh" "$TMP_SITEURL/" || exit 1
+  mkdir -p "$TMP_SITEURL/../supabase/templates" 2>/dev/null
+  # Os modelos moram em ../supabase/templates relativo ao script.
+  mkdir -p "$TMP_SITEURL/kit" "$TMP_SITEURL/supabase/templates"
+  cp "$KIT_AQUI/marca-emails.sh" "$KIT_AQUI/_common.sh" "$TMP_SITEURL/kit/"
+  cp "$KIT_AQUI/../supabase/templates/confirmation.html" \
+     "$KIT_AQUI/../supabase/templates/recovery.html" "$TMP_SITEURL/supabase/templates/" || exit 1
+
+  mkdir -p "$TMP_SITEURL/bin"
+  cat > "$TMP_SITEURL/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+# Dublê da Management API. Guarda o corpo do PATCH e o devolve nos GETs
+# seguintes — com o site_url trocado por outro domínio, que é o defeito.
+ESTADO="$TMPDIR_STUB/estado.json"
+corpo=""; metodo=GET
+prev=""
+for a in "$@"; do
+  case "$prev" in -X) metodo="$a";; -d) corpo="$a";; esac
+  prev="$a"
+done
+if [ "$metodo" = PATCH ]; then
+  printf '%s' "$corpo" > "$ESTADO"
+  printf '{}'
+  exit 0
+fi
+if [ -s "$ESTADO" ]; then
+  sed 's#"site_url": "[^"]*"#"site_url": "https://outro-dominio.exemplo.com"#' "$ESTADO"
+else
+  printf '{"site_url": "https://outro-dominio.exemplo.com", "uri_allow_list": ""}'
+fi
+STUB
+  chmod +x "$TMP_SITEURL/bin/curl"
+
+  PEND="$TMP_SITEURL/pendencia.txt"
+  saida="$(cd "$TMP_SITEURL/kit" && PATH="$TMP_SITEURL/bin:$PATH" \
+    TMPDIR_STUB="$TMP_SITEURL" PENDENCIA_ARQUIVO="$PEND" \
+    SUPABASE_ACCESS_TOKEN=sbp_de_teste \
+    NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklm.supabase.co \
+    NEXT_PUBLIC_APP_URL=https://crm.exemplo.com.br \
+    APP_NAME='Loja Teste' bash ./marca-emails.sh --env /dev/null 2>&1)"; rc=$?
+
+  # CONTROLE POSITIVO: se o dublê não levou o script até o caminho VERDE, a
+  # ausência de pendência abaixo não mede nada — mediria um script que morreu.
+  if ! printf '%s' "$saida" | grep -q 'CONFERIDOS'; then
+    printf '  ✗ o dublê não levou o script ao caminho verde — cenário inconclusivo, não verde\n'
+    printf '     (rc=%s, última linha: %s)\n' "$rc" \
+      "$(printf '%s' "$saida" | sed -E 's/\x1b\[[0-9;]*m//g' | grep -v '^$' | tail -1)"
+    exit 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    printf '  ✗ o script saiu %s — ele NÃO pode derrubar o install.sh\n' "$rc"; exit 1
+  fi
+  if [ ! -s "$PEND" ]; then
+    printf '  ✗ o Site URL ficou em outro domínio e NENHUMA pendência foi escrita\n'
+    printf '     (o ✓ verde provou só os modelos; a tela final da instalação fica muda\n'
+    printf '      e ninguém consegue redefinir a própria senha)\n'
+    exit 1
+  fi
+  if ! grep -q 'outro-dominio.exemplo.com' "$PEND"; then
+    printf '  ✗ a pendência não diz ONDE o Site URL está — quem lê não sabe o que conferir\n'; exit 1
+  fi
+  printf '  ✓ modelos no ar mas Site URL em outro domínio: o script anota a pendência (não some no verde)\n'
+) || fail=1
+rm -rf "$TMP_SITEURL"
+
+# E a tela final da instalação REPETE o motivo, em vez de descartá-lo: o arquivo
+# de pendência já era escrito e nunca lido.
+if ! grep -q 'PENDENCIA_EMAIL"$' ./install.sh && ! grep -q 'sed .*PENDENCIA_EMAIL' ./install.sh; then
+  printf '  ✗ a tela final não mostra o motivo gravado pelo marca-emails.sh\n'; fail=1
+else
+  printf '  ✓ a tela final repete o motivo que o passo automático encontrou\n'
+fi
+
+# —— ...e também não o guarda no RASCUNHO de retomada ——
+#
+# A guarda acima é um `grep` por `envq SUPABASE_ACCESS_TOKEN`, e `.env` é OUTRO
+# ARQUIVO: ela é cega para esta categoria inteira. O `ask_one` chama
+# `save_partial` para toda resposta aceita, e `save_partial` escreve em
+# `.env.partial` — então o token de CONTA ficava no disco desde a pergunta até o
+# `rm -f` que só roda depois de o `.env` ser escrito, e qualquer aborto no meio o
+# deixava lá (a tentativa seguinte ainda o recarregava, com "✓ retomando").
+# Isso desmentia a promessa escrita em três lugares — README, o comentário do
+# campo, e o fragmento em `.changes/`.
+#
+# Este cenário mede COMPORTAMENTO, não texto: roda o `ask_one` de verdade e
+# procura o valor no disco. Ele tem controle positivo (uma chave que DEVE ser
+# guardada, respondida na mesma sessão) — sem ele, um `save_partial` quebrado de
+# qualquer outro jeito deixaria o arquivo vazio e o teste ficaria verde pelo
+# motivo errado.
+TMP_RASCUNHO="$(mktemp -d)"
+(
+  KIT_AQUI="$PWD"
+  cd "$TMP_RASCUNHO" || exit 1
+  cp "$KIT_AQUI/install.sh" "$KIT_AQUI/_common.sh" . || exit 1
+  INSTALL_SH_LIB=1 . ./install.sh >/dev/null 2>&1
+  set +e   # o install.sh liga `set -e`; aqui as sondas precisam poder sair != 0
+
+  # Controle positivo primeiro: se ESTA não for guardada, a ausência do token
+  # abaixo não prova nada.
+  printf 'sr_CHAVE_DE_SERVICO_DE_TESTE\n' \
+    | ask_one SUPABASE_SERVICE_ROLE_KEY 'SR' '' '' secret '' >/dev/null 2>&1
+  printf 'sbp_TOKEN_DE_CONTA_DE_TESTE\n' \
+    | ask_one SUPABASE_ACCESS_TOKEN 'Token' '' '' secret opcional >/dev/null 2>&1
+
+  if ! grep -q 'sr_CHAVE_DE_SERVICO_DE_TESTE' .env.partial 2>/dev/null; then
+    printf '  ✗ sonda cega: nem a chave que DEVE ser guardada apareceu no rascunho\n'
+    printf '     (cenário inconclusivo, não verde — sem controle positivo a ausência do token não mede nada)\n'
+    exit 1
+  fi
+
+  # O valor, em QUALQUER arquivo do diretório — não só no `.env.partial`, e não
+  # o nome da variável: um `.tmp.$$` deixado para trás vaza o mesmo segredo.
+  vazou="$(grep -rl 'sbp_TOKEN_DE_CONTA_DE_TESTE' . 2>/dev/null | tr '\n' ' ')"
+  if [ -n "$vazou" ]; then
+    printf '  ✗ o SUPABASE_ACCESS_TOKEN foi para o disco:%s\n' " $vazou"
+    printf '     (é token de CONTA — abre a Management API, que cria e apaga projetos.\n'
+    printf '      O README promete que ele "não fica salvo"; um aborto antes do fim o deixava lá)\n'
+    exit 1
+  fi
+
+  # E o efeito colateral do conserto não pode ser perder a retomada: o que o
+  # rascunho existe para guardar continua guardado.
+  if [ "$(valor_no_env .env.partial SUPABASE_SERVICE_ROLE_KEY)" != 'sr_CHAVE_DE_SERVICO_DE_TESTE' ]; then
+    printf '  ✗ pular o token levou junto o resto do rascunho — a retomada quebrou\n'; exit 1
+  fi
+  printf '  ✓ o token de conta não entra no rascunho, e a retomada das outras respostas segue de pé\n'
+) || fail=1
+rm -rf "$TMP_RASCUNHO"
+
+# E a tela DIZ que o token vai ser perguntado de novo. Sem isso, quem retoma vê
+# "N respostas guardadas" e em seguida a mesma pergunta — que lê como defeito.
+if ! grep -q 'nunca entra no rascunho' ./install.sh; then
+  printf '  ✗ a tela de retomada não avisa que o token será perguntado de novo\n'; fail=1
+else
+  printf '  ✓ a tela de retomada avisa que o token de conta é perguntado de novo\n'
+fi
+
+echo "bootstrap do dono: o heredoc do SQL não pode conter crase"
+# O `<<SQL` da etapa 8 NÃO é citado — de propósito, porque o bloco interpola
+# OWNER_EMAIL, APP_LOCALE e AI_PROVIDER. O preço é que o bash também executa
+# substituição de comando lá dentro, comentário incluído. Medido numa instalação
+# real: um comentário escrito `-- \`locale\` aqui` fez o bash rodar o comando
+# `locale` e injetar a saída dele no meio do bloco, e o psql morreu com
+#   ERROR:  "language" is not a known variable
+#   LINE 11: LANGUAGE=
+# com o banco já provisionado e o .env já escrito — a instalação parava no passo
+# mais tarde de todos. O próprio install.sh avisa sobre isso 60 linhas abaixo do
+# ponto onde a crase entrou; o aviso não impediu, o teste impede.
+crases_no_sql="$(awk '/<<SQL/{dentro=1; next} /^SQL$/{dentro=0} dentro' ./install.sh | grep -n '`' || true)"
+if [ -n "$crases_no_sql" ]; then
+  printf '  ✗ crase dentro do heredoc <<SQL — o bash vai EXECUTAR isso e quebrar a criação do dono:\n'
+  printf '%s\n' "$crases_no_sql" | sed 's/^/       /'; fail=1
+else
+  printf '  ✓ o heredoc do bootstrap do dono está livre de crase\n'
 fi
 
 echo

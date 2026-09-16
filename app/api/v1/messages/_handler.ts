@@ -1,3 +1,16 @@
+import { assertAgentOperationSupabase } from "@/lib/ai/agents/operation";
+import {
+  assertApprovedReplySupabase,
+  recordApprovedReplyReceiptSupabase,
+  ApprovedReplyReceiptPersistenceError,
+  prepareApprovedReplySupabase,
+} from "@/lib/ai/replies/delivery";
+import { assertMeetingDeliverySupabase } from "@/lib/agenda/meet-delivery";
+import { AgendaDeferredError } from "@/lib/agenda/protecao-followup";
+import { assertAgendaEffectSupabase, guardAgendaEffect } from "@/lib/agenda/efeito";
+import { StaleServiceBoundaryError } from "@/lib/atendimento/fronteira";
+import { assertServiceBoundarySupabase } from "@/lib/atendimento/origem";
+import { currentExecutionBoundary, guardServiceEffect } from "@/lib/atendimento/fronteira-server";
 /**
  * Core handlers para messages (list + send).
  *
@@ -9,8 +22,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ApiError } from "@/lib/api/types";
+import { decidirPreGoLiveDoCanalViaSupabase } from "@/lib/ai/elegibilidade/consulta-pre-go-live";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { traduzir } from "@/lib/i18n/dicionario";
 import {
   CHANNEL_SESSION_REF_COLUMNS,
   DEFAULT_CHANNEL_PROVIDER,
@@ -104,9 +119,13 @@ async function removerEcoDoProprioEnvio(
       // produzir: apagar a própria mensagem que acabou de ser entregue. Quem
       // mexer no filtro de cima não vai ser avisado por teste nenhum.
       .neq("id", minhaLinhaId);
-    if (error) console.error("[messages.send] não consegui remover o eco do próprio envio", error.message);
+    if (error)
+      console.error("[messages.send] não consegui remover o eco do próprio envio", error.message);
   } catch (err) {
-    console.error("[messages.send] a remoção do eco lançou", err instanceof Error ? err.message : err);
+    console.error(
+      "[messages.send] a remoção do eco lançou",
+      err instanceof Error ? err.message : err,
+    );
   }
 }
 
@@ -195,7 +214,13 @@ export async function listMessagesHandler(
   if (q.cursor) {
     const c = decodeMsgCursor(q.cursor);
     if (!c) {
-      throw new ApiError(400, "invalid_cursor", undefined, ctx.requestId, "Cursor inválido.");
+      throw new ApiError(
+        400,
+        "invalid_cursor",
+        undefined,
+        ctx.requestId,
+        traduzir("Cursor inválido.", ctx.idioma ?? "pt-BR"),
+      );
     }
     query = query.or(`sent_at.lt.${c.sent_at},and(sent_at.eq.${c.sent_at},id.lt.${c.id})`);
   }
@@ -263,6 +288,20 @@ export async function sendMessageHandler(
   ctx: HandlerCtx,
   input: SendMessageInput,
 ): Promise<Message> {
+  if (ctx.meetingDelivery) await assertMeetingDeliverySupabase(supabase, ctx.meetingDelivery);
+  if (ctx.approvedReply) await assertApprovedReplySupabase(supabase, ctx.approvedReply);
+  if (ctx.agentOperation) await assertAgentOperationSupabase(supabase, ctx.agentOperation);
+  if (ctx.proactiveContext) await assertAgendaEffectSupabase(supabase, ctx.proactiveContext);
+  await guardAgendaEffect();
+  ctx = { ...ctx, serviceBoundary: ctx.serviceBoundary ?? currentExecutionBoundary() };
+  if (ctx.serviceBoundary) {
+    if (
+      ctx.serviceBoundary.organization_id !== ctx.organization_id ||
+      ctx.serviceBoundary.conversation_id !== input.conversation_id
+    )
+      throw new StaleServiceBoundaryError();
+    await assertServiceBoundarySupabase(supabase, ctx.serviceBoundary);
+  }
   // `archived_at` entra pelo helper tolerante porque este é O caminho de saída do
   // sistema inteiro (UI, automação, MCP e o agente passam por aqui): num clone que
   // subiu o código sem a migration 0106, pedir a coluna direto derrubaria TODO
@@ -270,16 +309,50 @@ export async function sendMessageHandler(
   // consulta certa (ver lib/channels/archived).
   const convSelect = (comArchived: boolean) =>
     `id, organization_id, contact_id, channel_session_id, is_group, group_chat_id, bot_silenced_until, provider_conversation_id, contacts:contact_id(phone_number, wa_identity, wa_lid, is_blocked), channel_sessions:channel_session_id(${CHANNEL_SESSION_REF_COLUMNS}, status${comArchived ? `, ${ARCHIVED_AT}` : ""})`;
+  //
+  // O filtro por `organization_id` NÃO é redundância com a RLS — é a única
+  // proteção que existe na metade dos chamadores. Este handler é a porta de
+  // saída de TODOS eles, e eles se dividem em dois mundos:
+  //
+  //   - rota REST com sessão de navegador → client de RLS, a policy basta;
+  //   - servidor MCP (lib/mcp/server.ts:41) e rota REST por `Bearer dsk_…`
+  //     (lib/api/auth-dual.ts) → `createAdminClient()`, SERVICE ROLE, que
+  //     bypassa RLS. Aqui não há policy nenhuma no caminho.
+  //
+  // Sem o filtro, um chamador de service-role com a org A passava um
+  // `conversation_id` da org B e a linha VINHA — e daí em diante todo o resto
+  // usa `c.organization_id`, a org da VÍTIMA: a mensagem era inserida na
+  // conversa dela e enviada pelo canal dela. Medido, não deduzido:
+  // `tests/invariants/envio-nao-alcanca-conversa-de-outro-tenant.test.ts`
+  // (anti-pattern 10 do CLAUDE.md).
   const { data: conv, error: convErr } = await queryTolerantToMissingArchived(
-    () => supabase.from("conversations").select(convSelect(true)).eq("id", input.conversation_id).maybeSingle(),
-    () => supabase.from("conversations").select(convSelect(false)).eq("id", input.conversation_id).maybeSingle(),
+    () =>
+      supabase
+        .from("conversations")
+        .select(convSelect(true))
+        .eq("id", input.conversation_id)
+        .eq("organization_id", ctx.organization_id)
+        .maybeSingle(),
+    () =>
+      supabase
+        .from("conversations")
+        .select(convSelect(false))
+        .eq("id", input.conversation_id)
+        .eq("organization_id", ctx.organization_id)
+        .maybeSingle(),
   );
 
   if (convErr) {
     throw new ApiError(500, "internal_error", undefined, ctx.requestId, convErr.message);
   }
   if (!conv) {
-    throw new ApiError(404, "not_found", undefined, ctx.requestId, "Conversa não encontrada.");
+    throw new ApiError(
+      404,
+      "not_found",
+      undefined,
+      ctx.requestId,
+      traduzir("Conversa não encontrada.", ctx.idioma ?? "pt-BR"),
+    );
   }
 
   type Joined = {
@@ -308,11 +381,14 @@ export async function sendMessageHandler(
       "forbidden",
       undefined,
       ctx.requestId,
-      "Contato bloqueou o atendimento.",
+      traduzir("Contato bloqueou o atendimento.", ctx.idioma ?? "pt-BR"),
     );
   }
 
-  if (input.media_storage_path && !isMediaPathOwnedBy(input.media_storage_path, c.organization_id, c.id)) {
+  if (
+    input.media_storage_path &&
+    !isMediaPathOwnedBy(input.media_storage_path, c.organization_id, c.id)
+  ) {
     throw new ApiError(
       422,
       "invalid_media_path",
@@ -340,7 +416,13 @@ export async function sendMessageHandler(
         throw new ApiError(500, "internal_error", undefined, ctx.requestId, sharedErr.message);
       }
       if (!shared) {
-        throw new ApiError(404, "not_found", undefined, ctx.requestId, "Contato não encontrado.");
+        throw new ApiError(
+          404,
+          "not_found",
+          undefined,
+          ctx.requestId,
+          traduzir("Contato não encontrado.", ctx.idioma ?? "pt-BR"),
+        );
       }
       const row = shared as {
         id: string;
@@ -356,7 +438,7 @@ export async function sendMessageHandler(
           "contact_anonymized",
           undefined,
           ctx.requestId,
-          "Contato anonimizado não pode ser compartilhado.",
+          traduzir("Contato anonimizado não pode ser compartilhado.", ctx.idioma ?? "pt-BR"),
         );
       }
       if (!row.phone_number) {
@@ -365,7 +447,7 @@ export async function sendMessageHandler(
           "missing_phone_number",
           undefined,
           ctx.requestId,
-          "Contato sem telefone para envio como cartão.",
+          traduzir("Contato sem telefone para envio como cartão.", ctx.idioma ?? "pt-BR"),
         );
       }
       const displayName = row.display_name ?? row.name ?? row.phone_number;
@@ -388,7 +470,7 @@ export async function sendMessageHandler(
           "invalid_payload",
           undefined,
           ctx.requestId,
-          "Telefone inválido para envio como cartão.",
+          traduzir("Telefone inválido para envio como cartão.", ctx.idioma ?? "pt-BR"),
         );
       }
       const nameRaw = typeof o.name === "string" ? o.name.trim() : "";
@@ -404,7 +486,10 @@ export async function sendMessageHandler(
         "invalid_payload",
         undefined,
         ctx.requestId,
-        "Informe metadata.shared_contact_id ou metadata.shared_contact com telefone.",
+        traduzir(
+          "Informe metadata.shared_contact_id ou metadata.shared_contact com telefone.",
+          ctx.idioma ?? "pt-BR",
+        ),
       );
     }
   }
@@ -436,13 +521,14 @@ export async function sendMessageHandler(
         "validation_error",
         undefined,
         ctx.requestId,
-        "A mensagem citada não é desta conversa.",
+        traduzir("A mensagem citada não é desta conversa.", ctx.idioma ?? "pt-BR"),
       );
     }
     citada = alvo as { id: string; external_id: string | null };
   }
 
   const insertRow = {
+    ...(ctx.internalMessageId ? { id: ctx.internalMessageId } : {}),
     organization_id: c.organization_id,
     // Guardado mesmo quando o canal não sabe citar: o fio existe no NOSSO
     // histórico de qualquer jeito, e é o que a tela desenha.
@@ -467,12 +553,30 @@ export async function sendMessageHandler(
     },
   };
 
-  const { data: created, error: insErr } = await supabase
+  let { data: created, error: insErr } = await supabase
     .from("messages")
     .insert(insertRow)
     .select(MSG_COLS)
     .single();
 
+  if (insErr?.code === "23505" && ctx.internalMessageId) {
+    const existing = await supabase
+      .from("messages")
+      .select(MSG_COLS)
+      .eq("organization_id", ctx.organization_id)
+      .eq("id", ctx.internalMessageId)
+      .eq("conversation_id", input.conversation_id)
+      .single();
+    if (existing.error) throw new Error("inline_message_identity_mismatch");
+    created = existing.data;
+    insErr = null;
+    if (
+      ["sent", "delivered", "read", "failed"].includes(
+        String((created as unknown as Message).status),
+      )
+    )
+      return created as unknown as Message;
+  }
   if (insErr || !created) {
     throw new ApiError(
       500,
@@ -497,7 +601,24 @@ export async function sendMessageHandler(
     waLid: c.contacts?.wa_lid,
   });
 
-  if (c.channel_sessions?.archived_at) {
+  // Releitura no sink: o operador pode ter fechado o canal enquanto o modelo
+  // gerava a resposta. Envio humano não passa por esta restrição da IA.
+  const acessoAtual = ctx.actor.type === "user" ? null : await decidirPreGoLiveDoCanalViaSupabase(supabase, {
+    organizationId: ctx.organization_id,
+    channelSessionId: c.channel_session_id,
+    contactPhoneNumber: c.contacts?.phone_number ?? "",
+  }).catch(() => ({ permite: false, motivo: "pre_go_live_indisponivel" }));
+  if (acessoAtual && !acessoAtual.permite) {
+    const { data: updated, error } = await supabase.from("messages").update({
+      status: "failed",
+      error_code: acessoAtual.motivo === "pre_go_live_indisponivel" ? "pre_go_live_indisponivel" : "pre_go_live",
+      error_message: acessoAtual.motivo === "pre_go_live_indisponivel"
+        ? "Não foi possível verificar o acesso da IA. Nenhuma mensagem foi enviada."
+        : "Envio automático bloqueado pelo modo de teste do canal.",
+    }).eq("organization_id", ctx.organization_id).eq("id", message.id).select(MSG_COLS).single();
+    if (error || !updated) throw new ApiError(500, "internal_error", undefined, ctx.requestId, "Não foi possível registrar o bloqueio do envio.");
+    message = updated as unknown as Message;
+  } else if (c.channel_sessions?.archived_at) {
     // Canal ARQUIVADO = canal excluído pelo usuário: a sessão já foi deslogada e
     // removida do transporte, e a credencial do canal oficial já foi revogada. É a
     // promessa da migration 0106 ("não é mais elegível para envio") virando
@@ -557,6 +678,15 @@ export async function sendMessageHandler(
   } else {
     try {
       // O que separa mídia de texto é a presença de `media` no envelope — o
+      const checkBoundary = async () => {
+        await guardServiceEffect();
+        await guardAgendaEffect();
+        if (ctx.meetingDelivery) await assertMeetingDeliverySupabase(supabase, ctx.meetingDelivery);
+        if (ctx.proactiveContext) await assertAgendaEffectSupabase(supabase, ctx.proactiveContext);
+        if (ctx.serviceBoundary) await assertServiceBoundarySupabase(supabase, ctx.serviceBoundary);
+        if (ctx.approvedReply) await prepareApprovedReplySupabase(supabase, ctx.approvedReply);
+        if (ctx.agentOperation) await assertAgentOperationSupabase(supabase, ctx.agentOperation);
+      };
       // adapter preserva o mesmo branch (e a mesma mensagem de erro de cada
       // método) do outro lado do seam.
       let externalId: string | null;
@@ -567,11 +697,15 @@ export async function sendMessageHandler(
         // coisa que só faz sentido para template.
         //
         // Mas quem SABE falar template é o adapter, quando sabe. Antes disto a
-        // linha de baixo era o único caminho, e ela lê `META_PHONE_NUMBER_ID` e
+        // linha de baixo era o único caminho, e ela lia `META_PHONE_NUMBER_ID` e
         // `META_SYSTEM_USER_TOKEN` do ambiente: template de QUALQUER canal saía
         // pelo número da Meta, com o token da Meta. Para o canal intermediado
         // isso não é falha de envio — é a mensagem saindo pelo número ERRADO
         // para o cliente certo, e ninguém percebe porque ela sai.
+        //
+        // Hoje a linha de baixo resolve a credencial DA SESSÃO e o ambiente ficou
+        // só como reserva (fatia F4 da #850), então ela precisa do número desta
+        // conexão: `sessionRef` sai da MESMA linha que o adapter recebe acima.
         // ─── Pré-voo ANTES de escolher transporte ──────────────────────────
         //
         // Vale para os dois caminhos, e é por isso que está aqui e não dentro
@@ -590,9 +724,11 @@ export async function sendMessageHandler(
           values: input.template_values ?? {},
         });
 
+        await checkBoundary();
         externalId = adapter.sendTemplate
           ? (
               await adapter.sendTemplate({
+                beforeSend: checkBoundary,
                 organizationId: ctx.organization_id,
                 sessionRef: resolveSessionRef(c.channel_sessions),
                 to: chatId,
@@ -603,7 +739,12 @@ export async function sendMessageHandler(
               })
             ).externalId
           : await sendTemplateForSession(supabase, {
+              beforeSend: checkBoundary,
               organizationId: ctx.organization_id,
+              // O número DESTA conexão: é por ele (com a organização) que a
+              // credencial da tela é achada. Sem ele, a resolução não casaria
+              // linha nenhuma e o envio voltaria ao ambiente.
+              sessionRef: resolveSessionRef(c.channel_sessions),
               to: chatId,
               name: input.template_name ?? "",
               language: input.template_language ?? "",
@@ -619,7 +760,9 @@ export async function sendMessageHandler(
           throw new Error(`storage_sign_failed: ${signErr?.message ?? "no_url"}`);
         }
         const filename = input.media_storage_path.split("/").pop() ?? undefined;
+        await checkBoundary();
         ({ externalId } = await adapter.send({
+          beforeSend: checkBoundary,
           organizationId: ctx.organization_id,
           sessionRef: resolveSessionRef(c.channel_sessions),
           to: chatId,
@@ -637,8 +780,7 @@ export async function sendMessageHandler(
         }));
       } else if (input.type === "contact") {
         const sc = outboundMetadata.shared_contact as
-          | { name: string; phone_number: string }
-          | undefined;
+          { name: string; phone_number: string } | undefined;
         if (!sc?.phone_number) {
           throw new Error("contact_payload_missing");
         }
@@ -649,7 +791,9 @@ export async function sendMessageHandler(
         // de proibido pelo invariante 1, trabalho jogado fora.
         const telefone = normalizePhoneForDisplay(sc.phone_number);
         const nome = sc.name?.trim() || telefone;
+        await checkBoundary();
         ({ externalId } = await adapter.send({
+          beforeSend: checkBoundary,
           organizationId: ctx.organization_id,
           sessionRef: resolveSessionRef(c.channel_sessions),
           to: chatId,
@@ -664,7 +808,9 @@ export async function sendMessageHandler(
           },
         }));
       } else {
+        await checkBoundary();
         ({ externalId } = await adapter.send({
+          beforeSend: checkBoundary,
           organizationId: ctx.organization_id,
           sessionRef: resolveSessionRef(c.channel_sessions),
           to: chatId,
@@ -674,13 +820,26 @@ export async function sendMessageHandler(
           replyToExternalId: citada?.external_id ?? null,
         }));
       }
+
+      // The provider has accepted the send. Preserve its receipt even if authority
+      // changed after the final beforeSend cut; recognition is not another send.
+      if (ctx.meetingDelivery) {
+        await assertMeetingDeliverySupabase(supabase, ctx.meetingDelivery);
+        if (ctx.serviceBoundary) await assertServiceBoundarySupabase(supabase, ctx.serviceBoundary);
+      }
+      if (ctx.approvedReply) {
+        message=await recordApprovedReplyReceiptSupabase(supabase,ctx.approvedReply,message.id,externalId,
+          externalId?(adapter.echoExternalIds?.({externalId,recipient:chatId})??[externalId]):[]) as unknown as Message;
+      } else {
       await removerEcoDoProprioEnvio(
         supabase,
         ctx.organization_id,
         c.id,
         message.id,
         externalId,
-        externalId ? (adapter.echoExternalIds?.({ externalId, recipient: chatId }) ?? [externalId]) : [],
+        externalId
+          ? (adapter.echoExternalIds?.({ externalId, recipient: chatId }) ?? [externalId])
+          : [],
       );
       const { data: updated } = await supabase
         .from("messages")
@@ -698,7 +857,9 @@ export async function sendMessageHandler(
         .select(MSG_COLS)
         .maybeSingle();
       if (updated) message = updated as unknown as Message;
+      }
     } catch (err) {
+      if (err instanceof StaleServiceBoundaryError || err instanceof AgendaDeferredError || err instanceof ApprovedReplyReceiptPersistenceError) throw err;
       const msg = err instanceof Error ? err.message : adapter.codes.unknownError;
       // `storage_sign_failed` fica literal: é falha do NOSSO Storage, não do
       // canal — a URL assinada é montada antes de qualquer coisa tocar o adapter.
@@ -744,6 +905,7 @@ export async function sendMessageHandler(
     }
   }
 
+  if (!ctx.approvedReply) {
   const conversationUpdate: {
     last_outbound_at: string;
     last_message_at: string;
@@ -786,6 +948,7 @@ export async function sendMessageHandler(
     .eq("id", c.contact_id)
     .eq("organization_id", c.organization_id);
 
+  }
   const a = actorAuditPayload(ctx.actor);
   await audit({
     action: "message.sent",

@@ -205,17 +205,49 @@ describe("fn_expurgar_auditoria_vencida — a retenção que a doutrina prometia
 });
 
 describe("append-only: por onde o expurgo pode passar, e por onde não pode", () => {
-  it("NINGUÉM tem GRANT de DELETE/UPDATE em api_audit_log — nem service_role", () => {
+  it("NINGUÉM tem GRANT de DELETE/UPDATE/TRUNCATE em api_audit_log — nem service_role", () => {
     // É por isso que o expurgo precisa de uma `security definer`: o admin client
     // do produto não consegue apagar esta tabela, e é bom que não consiga.
+    //
+    // ⚠️ `TRUNCATE` ENTRA NA SONDA, e por muito tempo não entrava. Esta versão
+    // do caso perguntava só por DELETE/UPDATE, devolvia vazio, e deixava quem
+    // leu concluindo que a tabela não podia ser esvaziada — enquanto o
+    // privilégio que a esvazia INTEIRA estava concedido a anon, authenticated e
+    // service_role pelo `GRANT` enumerado do `pg_dump` (o dump também enumera
+    // outras tabelas: `grep -nE '^GRANT [A-Z,]+ ON TABLE' supabase/baseline.sql
+    // | grep -v 'GRANT ALL'`).
+    //
+    // ⚠️ E ESTE CASO NÃO MEDE O SUPABASE REAL. O prelude do `test-db.sh`
+    // reproduz o default ACL do Supabase para funções, não para tabelas: aqui
+    // `api_audit_log` nasce só com o que o dump concede, e o caso fica verde
+    // com ou sem o revoke de UPDATE/DELETE da migration 0258. No Supabase o
+    // default ACL de tabelas dá UPDATE e DELETE aos três papéis; quem mede esse
+    // mundo é `audit-log-sob-o-default-acl-do-supabase.test.ts`.
     const linhas = sql(`
       select coalesce(string_agg(grantee || ':' || privilege_type, ',' order by grantee), '')
         from information_schema.role_table_grants
        where table_schema = 'public' and table_name = 'api_audit_log'
-         and privilege_type in ('DELETE', 'UPDATE')
+         and privilege_type in ('DELETE', 'UPDATE', 'TRUNCATE')
          and grantee in ('anon', 'authenticated', 'service_role');
     `);
     expect(lastLine(linhas)).toBe("");
+  });
+
+  it("INSERT e SELECT continuam de pé (controle positivo do revoke)", () => {
+    // Sem este controle, um `revoke` largo demais — `revoke all` no lugar do
+    // `revoke truncate` — deixaria o caso acima verde e a auditoria MORTA:
+    // ninguém mais gravaria linha, e a tabela ficaria append-only no sentido
+    // mais literal possível, o de nunca receber nada.
+    const privilegios = lastLine(
+      sql(`
+      select coalesce(string_agg(distinct privilege_type, ',' order by privilege_type), '')
+        from information_schema.role_table_grants
+       where table_schema = 'public' and table_name = 'api_audit_log'
+         and grantee = 'service_role';
+    `),
+    );
+    expect(privilegios).toContain("INSERT");
+    expect(privilegios).toContain("SELECT");
   });
 
   it("as duas funções não são executáveis por anon nem por authenticated", () => {

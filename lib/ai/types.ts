@@ -1,3 +1,4 @@
+import type { ServiceBoundary } from "@/lib/atendimento/fronteira";
 /**
  * Shared shapes for the EPIC-06 AI/RAG pipeline.
  *
@@ -59,9 +60,22 @@ export type SkipReason =
    * rodam na mesma mensagem: o engine responde de verdade e este aqui gasta
    * token à toa e deixa uma linha presa para sempre no inbox de quem instalou.
    */
-  | "engine_owns_reply";
+  | "engine_owns_reply"
+  /**
+   * O canal tem o gate de elegibilidade ligado (`channel_sessions.metadata.ai_gate
+   * = 'allowlist'`) e o contato NÃO foi autorizado por uma origem elegível
+   * (webhook do Respondi, match de campanha, ação de automação, retomada manual)
+   * — ou a autorização expirou. Este worker legado passa pela MESMA regra pura
+   * (`lib/ai/elegibilidade/gate.ts`) que o drain e o turno do agent-engine: não
+   * pode existir um caminho alternativo que responda uma conversa não
+   * autorizada. Também cai aqui quando a leitura da elegibilidade falha —
+   * fail-closed, porque schema pela metade é exatamente quando não se quer a IA
+   * solta.
+   */
+  | "nao_elegivel_para_ia";
 
 export interface BotContext {
+  serviceBoundary?: ServiceBoundary;
   organization_id: string;
   conversation_id: string;
   contact_id: string;
@@ -70,6 +84,12 @@ export interface BotContext {
   inbound_body: string;
   recent_messages: RecentMessage[];
   agent: {
+    kind?: string | null;
+    // Quem decide "este agente atende?" (`elegivelParaWorkerLegado`) lê esta
+    // coluna. Sem ela no contexto, a decisão recebia `undefined` e um agente
+    // PAUSADO passava — o defeito que dá nome à branch. `FatosDoAgente` a exige
+    // justamente para que o compilador ache os pontos que a esqueceram.
+    paused_at: string | null;
     id: string;
     model: string;
     system_prompt: string;

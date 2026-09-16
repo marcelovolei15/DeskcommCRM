@@ -1,3 +1,4 @@
+import { requireSupportWrite } from "@/lib/impersonate/support";
 /**
  * GET  /api/v1/channels/templates — o espelho local + o CONTRATO derivado de cada um.
  * POST /api/v1/channels/templates — força um sync com a Graph API.
@@ -14,6 +15,7 @@ import type { NextRequest, NextResponse } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { resolveMetaCreds } from "@/lib/channels/meta/credentials";
 import { metaSessionForOrg } from "@/lib/channels/meta/session";
 import { normalizeRejectedReason } from "@/lib/channels/meta/webhook";
 import { deriveTemplateContract, describeAddress } from "@/lib/channels/meta/template-contract";
@@ -146,6 +148,9 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(_req: NextRequest): Promise<NextResponse> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
   const r = await orgOrFail(requestId);
   if (!r.autorizado) return r.resposta;
@@ -155,15 +160,29 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
     return fail("invalid_request", "no_meta_channel", 400, { requestId });
   }
 
-  const token = process.env.META_SYSTEM_USER_TOKEN ?? "";
-  if (!token) return fail("invalid_request", "missing_meta_token", 400, { requestId });
+  // A credencial vem da SESSÃO que o operador conectou na tela, com o ambiente só
+  // como RESERVA — a mesma porta que `send`, `checkHealth` e `fetchInboundMedia` já
+  // usam. Antes disto este 400 olhava só `META_SYSTEM_USER_TOKEN`: numa instalação que
+  // conectou o número pela TELA, "Sincronizar modelos" respondia
+  // `400 missing_meta_token` a quem tinha credencial salva e visível na própria tela,
+  // e o 2º número oficial da instalação nunca sincronizava um modelo.
+  //
+  // A ORDEM dos desfechos NÃO muda: sem canal oficial a resposta continua
+  // `no_meta_channel`; com canal e sem credencial nenhuma (nem na sessão, nem no
+  // ambiente) continua `missing_meta_token` 400 — o que muda é só de ONDE a
+  // credencial sai quando existe.
+  const creds = await resolveMetaCreds(createAdminClient(), {
+    organizationId: r.orgId,
+    phoneNumberId: sessao.phoneNumberId ?? "",
+  });
+  if (!creds) return fail("invalid_request", "missing_meta_token", 400, { requestId });
 
   try {
     const counts = await syncTemplates({
       organizationId: r.orgId,
       wabaId: sessao.wabaId,
-      token,
-      graphVersion: process.env.META_GRAPH_VERSION ?? "v22.0",
+      token: creds.token,
+      graphVersion: creds.graphVersion,
     });
     return ok(counts);
   } catch (err) {

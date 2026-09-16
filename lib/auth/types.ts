@@ -1,3 +1,4 @@
+import type { InterfaceSettings } from "@/lib/navigation/interface";
 import type { Idioma } from "@/lib/i18n/idiomas";
 
 /**
@@ -63,6 +64,7 @@ export type VisibilityMode = "all" | "own_and_unassigned" | "own";
 export const DEFAULT_VISIBILITY_MODE: VisibilityMode = "own_and_unassigned"; // G1-06a
 
 export interface UserOrgMembership {
+  interface_settings?: InterfaceSettings;
   organization_id: string;
   organization_name: string;
   role: Role;
@@ -77,6 +79,7 @@ export interface UserOrgMembership {
 }
 
 export interface AuthUser {
+  support?: import("@/lib/impersonate/support").SupportContext | null;
   id: string;
   email: string;
   full_name: string | null;
@@ -134,6 +137,7 @@ export interface AuthUser {
 }
 
 export interface ActiveOrg {
+  interface_settings?: InterfaceSettings;
   orgId: string;
   name: string;
   role: Role;
@@ -143,6 +147,17 @@ export interface ActiveOrg {
    * de autorização — a RLS (fn_can_view_conversation) é quem garante o escopo.
    */
   visibility_mode?: VisibilityMode;
+  /**
+   * A regra "cliente pela agenda" está ligada nesta organização
+   * (`organizations.settings.crm.cliente_pela_agenda`, migration 0262)?
+   *
+   * Opcional pelo mesmo motivo de `visibility_mode`: só o layout de `/app`
+   * preenche, e ausente é desligado. NÃO é autorização nem é quem aplica a
+   * regra — quem decide é o banco (o trigger lê a chave). Serve para a tela não
+   * mostrar selo, data e funil de clientes de uma regra desligada, em que
+   * `first_service_at` está congelada.
+   */
+  cliente_pela_agenda?: boolean;
   /**
    * O que ESTA organização definiu para si — CAMPO A CAMPO, e só o que ela
    * mesma definiu.

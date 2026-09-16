@@ -359,7 +359,10 @@ function BlocoDeAgendamento({
       // rótulo dizia `, com ${pessoa.nome}`, que é o ATENDENTE: quem usa leitor
       // de tela ouvia os dois papéis trocados, e o card visual não desmente
       // porque em compromisso de 30min ele nem mostra o contato.
-      aria-label={`${t(agendamento.titulo)}, ${format(comeca, "HH:mm")} ${t("às")} ${format(termina, "HH:mm")}${
+      // `titulo` é DADO DO OPERADOR — a rota grava `title ?? tipo.name`, e
+      // `tipo.name` é o nome que ele cadastrou em Tipos de agendamento. Passá-lo
+      // por `t()` fazia "Retorno" virar "Seguimiento" na leitura de tela.
+      aria-label={`${agendamento.titulo}, ${format(comeca, "HH:mm")} ${t("às")} ${format(termina, "HH:mm")}${
         agendamento.quemSeraAtendido ? `, ${t("com")} ${agendamento.quemSeraAtendido}` : ""
       }${pessoa ? `, ${t("atendido por")} ${pessoa.nome}` : ""}${
         doGoogle ? `, ${t("ocupado na agenda do Google")}` : ""
@@ -521,6 +524,7 @@ function ColunaDeDia({
   pessoas,
   onAbrir,
   destacado,
+  soNoDesktop,
   interacao,
   proposta,
   arrasteDoCard,
@@ -531,6 +535,13 @@ function ColunaDeDia({
   pessoas: Pessoa[];
   onAbrir?: (id: string) => void;
   destacado: boolean;
+  /**
+   * Some abaixo de `md`. Na semana, o celular mostra UM dia por vez: sete
+   * colunas em 360px dão ~44px cada, e a célula de meia hora vira um alvo de
+   * ~44x24 — errar o toque passa a ser o caso comum, não a exceção. Com uma
+   * coluna só, o mesmo alvo fica com a largura inteira da tela.
+   */
+  soNoDesktop?: boolean;
   interacao?: InteracaoDaGrade;
   proposta?: PropostaDeRemarcacao | null;
   arrasteDoCard?: {
@@ -548,6 +559,7 @@ function ColunaDeDia({
       data-testid={`coluna-dia-${format(dia, "yyyy-MM-dd")}`}
       className={cn(
         "relative min-w-0 flex-1 border-r border-border last:border-r-0",
+        soNoDesktop && "max-md:hidden",
         destacado && "bg-surface-elevated/40",
       )}
     >
@@ -562,7 +574,7 @@ function ColunaDeDia({
         <span
           className={cn(
             "flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] tabular-nums",
-            ehHoje ? "bg-accent text-accent-fg font-semibold" : "text-text",
+            ehHoje ? "bg-accent text-accent-foreground font-semibold" : "text-text",
           )}
         >
           {format(dia, "d")}
@@ -674,7 +686,7 @@ function VisaoDeMes({
                   className={cn(
                     "flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] tabular-nums",
                     isSameDay(d, agora)
-                      ? "bg-accent font-semibold text-accent-fg"
+                      ? "bg-accent font-semibold text-accent-foreground"
                       : doMes
                         ? "text-text"
                         : "text-text-subtle",
@@ -704,7 +716,7 @@ function VisaoDeMes({
                         style={{ backgroundColor: corDaTrilha(trilha) }}
                       />
                       <span className="truncate text-[10px] leading-4 text-text">
-                        {format(new Date(c.comeca), "HH:mm")} {t(c.titulo)}
+                        {format(new Date(c.comeca), "HH:mm")} {c.titulo}
                       </span>
                     </div>
                   );
@@ -974,6 +986,7 @@ export function GradeDaAgenda({
                 pessoas={pessoas}
                 onAbrir={onAbrirAgendamento}
                 destacado={visao === "semana" && isSameDay(d, agora)}
+                soNoDesktop={visao === "semana" && !isSameDay(d, ancora)}
                 interacao={interacao}
                 proposta={proposta}
                 arrasteDoCard={arrasteDoCard}

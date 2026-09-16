@@ -1,3 +1,4 @@
+import { requireSupportWrite } from "@/lib/impersonate/support";
 /**
  * POST /api/v1/contacts/import — importa contatos de planilha CSV.
  *
@@ -24,9 +25,11 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { audit } from "@/lib/audit";
 import { encryptCpfSql, hashCpf } from "@/lib/contacts/cpf";
+import { traduzir } from "@/lib/i18n/dicionario";
 import {
   CSV_MAX_BYTES,
   CSV_MAX_DATA_ROWS,
+  decodificarCsv,
   mapHeader,
   mapLinha,
   parseCsv,
@@ -52,6 +55,9 @@ interface ImportSummary {
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
+  const supportDenied = await requireSupportWrite();
+  if (supportDenied) return supportDenied;
+
   const requestId = randomUUID();
   const supabase = await createClient();
   // spec 13 §4: escrita é agent+ (viewer é read-only), igual ao POST unitário.
@@ -59,6 +65,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!authz.ok) return authz.response;
   const user = authz.user;
   const orgId = authz.org.orgId;
+  const t = (texto: string) => traduzir(texto, user.idioma);
 
   let file: File;
   try {
@@ -67,9 +74,12 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (!(f instanceof File)) throw new Error("sem arquivo");
     file = f;
   } catch {
-    return fail("validation_failed", "Envie o arquivo como multipart/form-data no campo 'file'.", 422, {
-      requestId,
-    });
+    return fail(
+      "validation_failed",
+      t("Envie o arquivo como multipart/form-data no campo 'file'."),
+      422,
+      { requestId },
+    );
   }
 
   const nome = file.name ?? "";
@@ -80,27 +90,35 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!tipoOk) {
     return fail(
       "validation_failed",
-      "Formato não suportado — envie um arquivo .csv. No Excel use 'Salvar como' → 'CSV UTF-8'.",
+      t("Formato não suportado — envie um arquivo .csv. No Excel use 'Salvar como' → 'CSV UTF-8'."),
       422,
       { requestId },
     );
   }
   if (file.size > CSV_MAX_BYTES) {
-    return fail("validation_failed", `Arquivo maior que ${Math.floor(CSV_MAX_BYTES / 1024 / 1024)}MB.`, 413, {
-      requestId,
-    });
+    return fail(
+      "validation_failed",
+      t("Arquivo maior que ") + `${Math.floor(CSV_MAX_BYTES / 1024 / 1024)}MB.`,
+      413,
+      { requestId },
+    );
   }
 
   // ─── Parse + validação de linhas (puro; nada tocou no banco ainda) ───────
-  const text = await file.text();
+  // Os BYTES, não `file.text()` — ver `decodificarCsv` (#483).
+  const decodificado = decodificarCsv(await file.arrayBuffer());
+  if ("erro" in decodificado) {
+    return fail("validation_failed", t(decodificado.erro), 422, { requestId });
+  }
+  const text = decodificado.texto;
   const rows = parseCsv(text);
   if (rows.length < 2) {
-    return fail("validation_failed", "CSV vazio ou sem linhas de dados.", 422, { requestId });
+    return fail("validation_failed", t("CSV vazio ou sem linhas de dados."), 422, { requestId });
   }
   const header = rows[0]!;
-  const mapeado = mapHeader(header);
+  const mapeado = mapHeader(header, t);
   if (mapeado.motivo !== null) {
-    return fail("validation_failed", `Cabeçalho inválido: ${mapeado.motivo}.`, 422, {
+    return fail("validation_failed", `${t("Cabeçalho inválido:")} ${mapeado.motivo}.`, 422, {
       details: { header: header.join(", ") },
       requestId,
     });
@@ -111,7 +129,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (dataRows.length > CSV_MAX_DATA_ROWS) {
     return fail(
       "validation_failed",
-      `Máximo de ${CSV_MAX_DATA_ROWS} linhas por importação — divida a planilha.`,
+      `${t("Máximo de")} ${CSV_MAX_DATA_ROWS} ${t("linhas por importação — divida a planilha.")}`,
       422,
       { requestId },
     );
@@ -119,29 +137,22 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const candidatos: Array<{ linha: number; contato: Record<string, unknown> }> = [];
   const errors: LinhaErro[] = [];
-  const vistosNoArquivo = new Set<string>();
 
   for (let i = 0; i < dataRows.length; i++) {
     const linha = i + 2; // 1-based contando o cabeçalho — bate com o editor de planilhas.
-    const { contato, motivo } = mapLinha(dataRows[i]!, indices);
+    const { contato, motivo } = mapLinha(dataRows[i]!, indices, t);
     if (motivo !== null) {
       errors.push({ linha, motivo });
       continue;
     }
     if (contato.cpf && !isValidCpf(contato.cpf)) {
-      errors.push({ linha, motivo: `CPF inválido: "${contato.cpf}"` });
+      errors.push({ linha, motivo: t("CPF inválido: ") + `"${contato.cpf}"` });
       continue;
     }
-    const chave = contato.phone_number ?? `email:${(contato.email as string).toLowerCase()}`;
-    if (vistosNoArquivo.has(chave)) {
-      continue; // repetido DENTRO do arquivo — conta como duplicado, sem ruído de erro.
-    }
-    vistosNoArquivo.add(chave);
-
     const parsed = contactCreateSchema.safeParse({ ...contato, source: SOURCE_IMPORT_CSV });
     if (!parsed.success) {
       const primeiro = parsed.error.issues[0];
-      errors.push({ linha, motivo: primeiro?.message ?? "dados inválidos" });
+      errors.push({ linha, motivo: primeiro?.message ?? t("dados inválidos") });
       continue;
     }
     candidatos.push({ linha, contato: parsed.data as Record<string, unknown> });
@@ -200,6 +211,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   for (const { linha, contato } of candidatos) {
     const phone = contato.phone_number as string | undefined;
     const email = contato.email as string | undefined;
+    // Só contatos existentes ou gravados com sucesso reservam identificadores.
+    // Cada repetição chega aqui para ter desfecho; uma linha inválida ou que
+    // falhou no insert não pode descartar outra válida do mesmo arquivo.
     if (
       (phone && phoneLookupVariants(phone).some((v) => existentes.has(`tel:${v}`))) ||
       (email && existentes.has(`email:${email.toLowerCase()}`))

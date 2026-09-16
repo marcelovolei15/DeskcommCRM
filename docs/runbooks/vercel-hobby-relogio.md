@@ -1,6 +1,14 @@
 # Relógio no Vercel Hobby (follow-up não fica preso)
 
-## Por que existe
+## Plano Pro
+
+No Pro o relógio nativo é o `vercel.ts` da raiz — a mesma cadência do
+`docker/scheduler/entrypoint.sh` (follow-up, dreno, dispatcher, agenda…).
+Expressões de minuto **quebram o deploy Hobby**. Este runbook é só para quem
+está no plano gratuito e precisa de um cron de fora. Não crie `vercel.json`
+ao lado do `vercel.ts`: a Vercel recusa os dois.
+
+## Por que existe (Hobby)
 
 No plano Hobby a Vercel só agenda **1 cron por dia**. Sem um relógio externo:
 

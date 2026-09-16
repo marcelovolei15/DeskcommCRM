@@ -65,7 +65,8 @@ function Conferencia({
   estado: CamadaDeSeguranca | undefined;
   podeEditar: boolean;
   salvando: boolean;
-  onToggle: (layer: string, v: boolean) => void;
+  /** Só o valor: QUAL camada gravar é decisão de quem monta o item, não do item. */
+  onToggle: (v: boolean) => void;
 }) {
   const t = useT();
   // Prefixo próprio para o ITEM: os controles dentro dele têm testid começando em
@@ -81,12 +82,12 @@ function Conferencia({
         {ordem ?? "•"}
       </span>
       <div className="space-y-1">
-        <p className="text-sm font-medium">{c.rotulo}</p>
-        <p className="text-xs text-muted-foreground">{c.oQueProtege}</p>
+        <p className="text-sm font-medium">{t(c.rotulo)}</p>
+        <p className="text-xs text-muted-foreground">{t(c.oQueProtege)}</p>
         {c.escolha === null ? (
           <p data-testid={`conferencia-${c.nome}-fixa`} className="text-xs text-muted-foreground">
             <span className="font-medium text-foreground">{t("Isto não se desliga.")}</span>{" "}
-            {c.porQueNaoSeDesliga}
+            {t(c.porQueNaoSeDesliga)}
           </p>
         ) : (
           <div data-testid={`conferencia-${c.nome}-escolha`} className="space-y-1">
@@ -95,8 +96,8 @@ function Conferencia({
                 data-testid={`conferencia-${c.nome}-liga`}
                 checked={estado?.efetivo ?? false}
                 disabled={!podeEditar || salvando}
-                onCheckedChange={(v) => onToggle(c.nome, v)}
-                aria-label={c.rotulo}
+                onCheckedChange={(v) => onToggle(v)}
+                aria-label={t(c.rotulo)}
               />
               <span className="text-xs text-muted-foreground">
                 {estado === undefined
@@ -109,7 +110,7 @@ function Conferencia({
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              {t("Custa")} {c.escolha.custo}
+              {t("Custa")} {t(c.escolha.custo)}
               {t(". O modelo usado se escolhe em")}{" "}
               <a className="underline underline-offset-2" href="/app/ai/providers">
                 {t("Provedores de IA")}
@@ -130,12 +131,18 @@ export function PainelDeSeguranca() {
 
   const porNome = new Map((camadas.data?.camadas ?? []).map((c) => [c.layer as string, c]));
   const podeEditar = camadas.data?.podeEditar ?? false;
-  const props = (camada: string | null) => ({
+  // `camada` — a chave de `org_guardrail_layers` — e NÃO `nome`, que é o
+  // identificador de tela. O interruptor mandava `c.nome` ("jailbreak_detect"),
+  // a rota valida contra o enum de camadas ("jailbreak"), e ligar qualquer uma
+  // das duas devolvia 422 em toda instalação. O `as` de antes escondia isso do
+  // typecheck; sem ele, trocar de campo vira erro de compilação.
+  const props = (camada: ConferenciaDeSaida["camada"]) => ({
     estado: camada === null ? undefined : porNome.get(camada),
     podeEditar,
     salvando: gravar.isPending,
-    onToggle: (layer: string, v: boolean) =>
-      gravar.mutate({ layer: layer as CamadaDeSeguranca["layer"], enabled: v }),
+    onToggle: (v: boolean) => {
+      if (camada !== null) gravar.mutate({ layer: camada, enabled: v });
+    },
   });
 
   return (

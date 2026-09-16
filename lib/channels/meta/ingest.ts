@@ -26,6 +26,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "../archived";
 import { aplicarEfeitosPosEntrada } from "../pos-entrada";
 import { encontrarContatoPorTelefone } from "../contato-por-telefone";
+import { marcarConversaComMensagem } from "../marcar-conversa";
 import { canonicalPhoneBR, phoneLookupVariants } from "../phone-variants";
 import type { ChannelTenantScope } from "../types";
 import type { InboundMessageEvent } from "./webhook";
@@ -180,6 +181,10 @@ export async function ingestMetaInbound(
       type: e.type === "text" ? "text" : e.type,
       body: e.type === "contact" ? (e.sharedContact?.name ?? e.text) : e.text,
       external_id: e.externalId,
+      // O webhook oficial entrega o media_id, não um arquivo que o browser
+      // consiga abrir. Mantemos um ponteiro opaco para o adapter resolver pela
+      // Graph API; sem ele a bolha nem é renderizada e o worker pula a mídia.
+      media_url: e.media ? `meta-media:${e.media.id}` : null,
       media_mime: e.media?.mime ?? null,
       sent_at: e.sentAt.toISOString(),
       metadata: {
@@ -196,18 +201,42 @@ export async function ingestMetaInbound(
     return { status: "failed", reason: `mensagem: ${erroInsert.message}` };
   }
 
-  // Carimba a conversa — é ISTO que move `last_inbound_at` e abre a janela de 24h.
-  // Falha aqui não derruba a ingestão (a mensagem já entrou), mas o preview e a
-  // janela ficariam desatualizados, então o erro sobe como `failed` parcial no log
-  // do chamador em vez de sumir.
-  await admin.rpc("fn_mark_conversation_message" as never, {
-    p_conv: conversationId as string,
-    p_direction: "inbound",
-    p_preview: previewOf(e),
-    p_at: e.sentAt.toISOString(),
-  } as never);
+  // Carimba a conversa — é ISTO que move `last_message_at`, `last_inbound_at` e
+  // abre a janela de 24h. Falha aqui não derruba a ingestão (a mensagem já
+  // entrou), mas a prévia, a ordenação da Inbox e a janela ficariam paradas.
+  //
+  // ⚠️ O RETORNO ERA IGNORADO, e o comentário que estava aqui afirmava o
+  // contrário — "o erro sobe como `failed` parcial no log do chamador em vez de
+  // sumir". Sumia: era um `await` sem destino para o `{ error }`. O canal
+  // oficial era o pior dos três justamente onde a falha dói mais, porque é ele
+  // que tem janela de 24h — e conversa sem carimbo é janela que ninguém vê
+  // fechar. Quem decide o que fazer com a falha agora é uma função só.
+  await marcarConversaComMensagem(admin, {
+    organizationId: orgId,
+    conversationId: conversationId as string,
+    direction: "inbound",
+    preview: previewOf(e),
+    at: e.sentAt.toISOString(),
+    canal: "meta",
+  });
 
   const messageId = (inserida as { id: string } | null)?.id ?? "";
+  if (e.media && messageId) {
+    const { error: erroPersistencia } = await admin.rpc("emit_event" as never, {
+      p_event_type: "media.persist_requested",
+      p_entity_kind: "message",
+      p_entity_id: messageId,
+      p_payload: { message_id: messageId, conversation_id: conversationId as string },
+      p_metadata: { source: "meta_webhook" },
+      p_organization_id: orgId,
+    } as never);
+    if (erroPersistencia) {
+      console.error(
+        "[meta.ingest] emit media.persist_requested failed",
+        erroPersistencia.message,
+      );
+    }
+  }
   await aplicarEfeitosPosEntrada(admin, {
     organizationId: orgId,
     contactId: contactId as string,
