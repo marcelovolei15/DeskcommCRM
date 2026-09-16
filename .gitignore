@@ -1,3 +1,6 @@
+# Prumo (plano/economia de token local, nao versionado)
+.prumo/
+
 # Dependencies
 node_modules/
 # Sem a barra tambem: `node_modules/` casa so com diretorio, e um SYMLINK
