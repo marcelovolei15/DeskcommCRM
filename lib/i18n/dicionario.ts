@@ -37,6 +37,66 @@ import type { Idioma } from "./idiomas";
 type Traducoes = Record<string, Partial<Record<Exclude<Idioma, "pt-BR">, string>>>;
 
 export const DICIONARIO: Traducoes = {
+  // vocabulario.ts (followups) — MatchReplyForm.tsx não traduzia, ClassifyForm.tsx sim.
+  "Se a informação já existir": { es: "Si la información ya existe" },
+  "Perguntar de novo e substituir": { es: "Preguntar de nuevo y reemplazar" },
+  "Confirmar com o usuário": { es: "Confirmar con el usuario" },
+  "A captação ou a ficha podem já ter o nome (ou o campo). Escolha se o fluxo pula, pergunta de novo ou pede confirmação.": {
+    es: "La captación o la ficha pueden ya tener el nombre (o el campo). Elige si el flujo lo salta, pregunta de nuevo o pide confirmación.",
+  },
+  // chaveDaIa.ts (onboarding/setup-ai) — erros do cadastro da chave de IA.
+  // "Sua sessão expirou. Entre de novo." já existe (politicaDeMfa.ts), reaproveitada aqui.
+  "Só um administrador pode cadastrar a chave da inteligência artificial.": {
+    es: "Solo un administrador puede registrar la clave de la inteligencia artificial.",
+  },
+  "Escolha qual inteligência artificial você contratou.": {
+    es: "Elige qué inteligencia artificial contrataste.",
+  },
+  "Essa chave parece incompleta. Cole a chave inteira, do começo ao fim.": {
+    es: "Esa clave parece incompleta. Pega la clave entera, de principio a fin.",
+  },
+  "Já existe uma chave cadastrada com esse nome. Veja em IA › Credenciais.": {
+    es: "Ya existe una clave registrada con ese nombre. Revisa en IA › Credenciales.",
+  },
+  "Não consegui guardar a chave agora. Tente de novo.": {
+    es: "No pude guardar la clave ahora. Intenta de nuevo.",
+  },
+  // AgentForm.tsx — prompt padrão de um agente novo (vira o system_prompt de
+  // verdade se ninguém editar, por isso instrui a IA a responder em espanhol).
+  "Você é um atendente. Responda de forma educada e clara, em pt-BR.": {
+    es: "Eres un agente de atención al cliente. Responde de forma educada y clara, en español.",
+  },
+  // PACOTES (lib/mcp/tools/pacotes.ts) — rótulo/explicação dos pacotes de
+  // capacidade na tela de criar/editar agente (ToolPicker.tsx).
+  "Atender e responder": { es: "Atender y responder" },
+  "O agente lê a conversa, entende o histórico e responde ao cliente sem pedir que ele repita o que já disse.": {
+    es: "El agente lee la conversación, entiende el historial y responde al cliente sin pedirle que repita lo que ya dijo.",
+  },
+  "Vender e mover o funil": { es: "Vender y mover el embudo" },
+  "O agente registra a oportunidade, atualiza o negócio e move o cliente de etapa conforme a conversa avança.": {
+    es: "El agente registra la oportunidad, actualiza el negocio y mueve al cliente de etapa a medida que avanza la conversación.",
+  },
+  "Não perder o cliente": { es: "No perder al cliente" },
+  "O agente agenda retornos e acompanha quem esfriou, para que nenhum interessado morra por falta de resposta.": {
+    es: "El agente agenda seguimientos y da seguimiento a quien se enfrió, para que ningún interesado se pierda por falta de respuesta.",
+  },
+  "Passar para um humano": { es: "Pasar a un humano" },
+  "O agente reconhece quando não é o caso dele resolver, chama uma pessoa e entrega o resumo do que já aconteceu.": {
+    es: "El agente reconoce cuándo no le corresponde resolverlo, llama a una persona y entrega el resumen de lo que ya pasó.",
+  },
+  "Organizar a operação": { es: "Organizar la operación" },
+  "O agente mantém a casa em ordem: marcadores, etapas do funil, avisos automáticos e distribuição de trabalho.": {
+    es: "El agente mantiene todo en orden: etiquetas, etapas del embudo, avisos automáticos y distribución del trabajo.",
+  },
+  "Aprender e evoluir": { es: "Aprender y evolucionar" },
+  "O agente consulta o que a empresa já sabe, aprende com os atendimentos e sugere melhorias para você aprovar.": {
+    es: "El agente consulta lo que la empresa ya sabe, aprende de las atenciones y sugiere mejoras para que las apruebes.",
+  },
+  // vocabulario.ts (followups) — ESPERA_PELA_RESPOSTA.ajuda era string pronta
+  // em português; virou função composta com t() (ver lib/followup/vocabulario.ts).
+  "Se o contato não responder dentro desse tempo, o fluxo segue sozinho pelo caminho": {
+    es: "Si el contacto no responde dentro de ese tiempo, el flujo sigue solo por el camino",
+  },
   "Versão publicada": { es: "Versión publicada" },
   "Publicado em": { es: "Publicado el" },
   "Nenhum agente publicado": { es: "Ningún agente publicado" },
@@ -423,6 +483,10 @@ export const DICIONARIO: Traducoes = {
   Minhas: { es: "Mías" },
   Todas: { es: "Todas" },
   Fechadas: { es: "Cerradas" },
+  // O estado `archived` é terminal como `closed`, mas conta outra coisa: é a
+  // pasta do histórico. Sem entrada própria, a aba "Arquivadas" apareceria
+  // traduzida como "Cerradas" para um operador hispanofalante.
+  Arquivadas: { es: "Archivadas" },
   IA: { es: "IA" },
   "Sem mensagens": { es: "Sin mensajes" },
   "Nenhuma conversa": { es: "Ninguna conversación" },
@@ -887,6 +951,7 @@ export const DICIONARIO: Traducoes = {
   // ─── Agentes de IA: seletor de modelo, capacidades, credencial, handoff ───
   Modelo: { es: "Modelo" },
   "Selecione um modelo": { es: "Selecciona un modelo" },
+  "Digite o identificador do modelo": { es: "Escribe el identificador del modelo" },
   "Nenhum modelo disponível": { es: "Ningún modelo disponible" },
   "Nenhuma capacidade disponível ainda para esta jornada.": {
     es: "Todavía no hay capacidades disponibles para esta jornada.",
@@ -1444,6 +1509,7 @@ export const DICIONARIO: Traducoes = {
   "é pelo menos": { es: "es al menos" },
   "é no máximo": { es: "es como máximo" },
   "tem a etiqueta": { es: "tiene la etiqueta" },
+  "tem a tag": { es: "tiene la etiqueta" },
   "não tem a etiqueta": { es: "no tiene la etiqueta" },
   "é exatamente": { es: "es exactamente" },
   "não é": { es: "no es" },
@@ -3957,6 +4023,12 @@ export const DICIONARIO: Traducoes = {
   "Não consegui iniciar a atualização. Tente de novo em instantes.": {
     es: "No pude iniciar la actualización. Intenta de nuevo en instantes.",
   },
+  // ── Os três estados do plantão do atendente. "Fora do horário" é estado
+  //    PRÓPRIO de propósito: confundi-lo com "Desligado" faz o operador ir
+  //    procurar defeito onde só existe uma jornada que terminou.
+  "De plantão": { es: "De guardia" },
+  "Fora do horário": { es: "Fuera del horario" },
+  "Desligado": { es: "Apagado" },
   "Atualizando para a versão": { es: "Actualizando a la versión" },
   // ── A espera antes de o servidor pegar o pedido, e o fim reconhecido na hora.
   //    Os dois estados que a tela ganhou quando parou de fingir que a conversa
@@ -4520,6 +4592,7 @@ export const DICIONARIO: Traducoes = {
   "Entrou por": { es: "Entró por" },
   "Posição": { es: "Posición" },
   "na fila": { es: "en la cola" },
+  "Última mensagem do cliente": { es: "Último mensaje del cliente" },
   Arquivada: { es: "Archivada" },
   "Aguardando o cliente": { es: "Esperando al cliente" },
 
@@ -4577,6 +4650,11 @@ export const DICIONARIO: Traducoes = {
   },
   "Pausando...": { es: "Pausando..." },
   "Fechar esta conversa?": { es: "¿Cerrar esta conversación?" },
+  "Arquivar esta conversa?": { es: "¿Archivar esta conversación?" },
+  "Arquivar encerra este atendimento e guarda a conversa no histórico. Se o cliente escrever de novo, ela volta. Arquivar?": {
+    es: "Archivar cierra esta atención y guarda la conversación en el historial. Si el cliente vuelve a escribir, la conversación regresa. ¿Archivar?",
+  },
+  "Arquivando...": { es: "Archivando..." },
   Automático: { es: "Automático" },
   Alguém: { es: "Alguien" },
   "Nota interna · só o time vê": { es: "Nota interna · solo la ve el equipo" },
@@ -5595,6 +5673,14 @@ export const DICIONARIO: Traducoes = {
   },
   "CPF (opcional)": { es: "CPF (opcional)" },
   "Criar contato": { es: "Crear contacto" },
+  "Trocar contato": { es: "Cambiar contacto" },
+  "Sem contato, este lead não recebe WhatsApp nem entra nas automações.": {
+    es: "Sin contacto, este lead no recibe WhatsApp ni entra en las automatizaciones.",
+  },
+  "Procure pelo nome ou telefone": { es: "Busque por nombre o teléfono" },
+  "Nenhum contato com esse nome ou telefone.": {
+    es: "Ningún contacto con ese nombre o teléfono.",
+  },
   "Contato criado": { es: "Contacto creado" },
   "Não foi possível carregar as sugestões agora.": { es: "No se pudieron cargar las sugerencias ahora." },
   "Não foi possível registrar a decisão.": { es: "No se pudo registrar la decisión." },
@@ -5609,6 +5695,8 @@ export const DICIONARIO: Traducoes = {
   "Nenhuma atividade registrada ainda.": { es: "Ninguna actividad registrada todavía." },
   "Todas as origens": { es: "Todos los orígenes" },
   "Importado (CSV)": { es: "Importado (CSV)" },
+  "Anúncio da Meta": { es: "Anuncio de Meta" },
+  "Anúncio do Google": { es: "Anuncio de Google" },
 
   // ─── Settings: painel de atualização — histórico multi-versão (merge upstream) ───
   "Da versão": { es: "De la versión" },
@@ -6057,6 +6145,11 @@ export const DICIONARIO: Traducoes = {
   "Esta ação remove o que está selecionado. Não pode ser desfeita.": {
     es: "Esta acción elimina lo que está seleccionado. No se puede deshacer.",
   },
+  // Excluir UM card pelo menu do card: diz o que vai junto (o histórico de
+  // atividades, por cascade) e o que fica. "card" pelo mesmo motivo acima.
+  "O card sai do funil com o histórico de atividades. O contato e as conversas continuam. Esta ação não pode ser desfeita.": {
+    es: "La tarjeta sale del embudo con el historial de actividades. El contacto y las conversaciones se mantienen. Esta acción no se puede deshacer.",
+  },
   "Selecionar": { es: "Seleccionar" },
   "Selecionar todos em": { es: "Seleccionar todos en" },
   "Desmarcar todos em": { es: "Desmarcar todos en" },
@@ -6087,6 +6180,12 @@ export const DICIONARIO: Traducoes = {
     es: "Indica el motivo. Esta información ayuda a mejorar el embudo.",
   },
   "Detalhe (opcional)": { es: "Detalle (opcional)" },
+  // Sem esta linha, "Outro" com funil configurado é beco sem saída: a tela
+  // oferece a opção, recusa todo texto que não seja um motivo já cadastrado, e
+  // não diz ONDE se cadastra um motivo novo.
+  "Para usar um motivo que não está aqui, cadastre em Configurações › Funis.": {
+    es: "Para usar un motivo que no está aquí, configúralo en Configuración › Embudos.",
+  },
   "Ex: Cliente desistiu por X motivo": { es: "Ej: El cliente desistió por X motivo" },
   "Confirmar": { es: "Confirmar" },
   "Lead criado": { es: "Lead creado" },
@@ -7983,7 +8082,7 @@ export const DICIONARIO: Traducoes = {
   "Lead foi modificado por outro usuário. Recarregue e tente novamente.": { es: "El lead fue modificado por otro usuario. Recarga e intenta de nuevo." },
   "Liberou a conversa de volta para a fila": { es: "Liberó la conversación de vuelta a la cola" },
   "Material não encontrado.": { es: "Material no encontrado." },
-  "Move cross-pipeline não é permitido. Clone o lead para o pipeline alvo.": { es: "Mover entre pipelines no está permitido. Clona el lead hacia el pipeline destino." },
+  "Move cross-pipeline não é permitido. Use POST /api/v1/leads/[id]/clone para levar o negócio a outro funil.": { es: "Mover entre pipelines no está permitido. Usa POST /api/v1/leads/[id]/clone para llevar el negocio a otro embudo." },
   "Nada para alterar.": { es: "Nada para modificar." },
   "Nenhum arquivo foi enviado.": { es: "Ningún archivo fue enviado." },
   "Nenhum lead acessível na operação.": { es: "Ningún lead accesible en la operación." },
@@ -8054,12 +8153,17 @@ export const DICIONARIO: Traducoes = {
   "Stage não pertence ao pipeline informado.": {
     es: "El stage no pertenece al pipeline informado.",
   },
-  "Move cross-pipeline não é permitido.": { es: "Mover entre pipelines no está permitido." },
   "Lead foi modificado concorrentemente.": { es: "El lead fue modificado de forma concurrente." },
   "leads por bulk.": { es: "leads por lote." },
   "Esta sugestão já foi": { es: "Esta sugerencia ya fue" },
   "decidida": { es: "decidida" },
   "Informe o motivo da perda.": { es: "Indica el motivo de la pérdida." },
+  "Informe o motivo da perda: use “Marcar como perdido” no menu do card, que pede o motivo.": {
+    es: "Indica el motivo de la pérdida: usa “Marcar como perdido” en el menú del card, que pide el motivo.",
+  },
+  "Esse motivo de perda não está na lista deste funil — escolha um dos motivos configurados.": {
+    es: "Ese motivo de pérdida no está en la lista de este embudo — elige uno de los motivos configurados.",
+  },
   "Pipeline não tem stage de fechamento como ganho.": {
     es: "El pipeline no tiene stage de cierre como ganado.",
   },
@@ -8068,6 +8172,30 @@ export const DICIONARIO: Traducoes = {
   },
   "Perdido —": { es: "Perdido —" },
   "(negócio removido)": { es: "(negocio eliminado)" },
+  // Troca de funil (POST /api/v1/leads/[id]/clone): o rótulo da linha do negócio
+  // novo e as duas razões que não dependem do nome do funil.
+  "Veio de outro funil": { es: "Vino de otro embudo" },
+  "Levado para outro funil": { es: "Llevado a otro embudo" },
+  // As recusas da troca de funil (lib/leads/clonar-para-funil.ts e a rota).
+  "O negócio já está neste funil. Para trocar de etapa use /api/v1/leads/[id]/move.": {
+    es: "El negocio ya está en este embudo. Para cambiar de etapa usa /api/v1/leads/[id]/move.",
+  },
+  "Só um negócio aberto pode ser levado para outro funil.": {
+    es: "Solo un negocio abierto puede llevarse a otro embudo.",
+  },
+  "A etapa não pertence ao funil de destino.": {
+    es: "La etapa no pertenece al embudo de destino.",
+  },
+  "A etapa de destino é de fechamento: escolha uma etapa aberta do funil.": {
+    es: "La etapa de destino es de cierre: elige una etapa abierta del embudo.",
+  },
+  "O funil de destino não tem etapa aberta para receber o negócio.": {
+    es: "El embudo de destino no tiene etapa abierta para recibir el negocio.",
+  },
+  "Funil de destino não encontrado.": { es: "Embudo de destino no encontrado." },
+  "O funil de origem não tem etapa de perda para encerrar o negócio.": {
+    es: "El embudo de origen no tiene etapa de pérdida para cerrar el negocio.",
+  },
 
   // ─── Fase B: vocabulario de dominio persistido (reason de crm_lead_activities) ───
   //
@@ -8687,6 +8815,341 @@ export const DICIONARIO: Traducoes = {
   "Erro ao reativar tenant": { es: "Error al reactivar el tenant" },
   "Incidente resolvido com sucesso": { es: "Incidente resuelto con éxito" },
   "Erro ao resolver incidente": { es: "Error al resolver el incidente" },
+  // Extensões declarativas — interface e mensagens literais da API.
+  "Extensões": { es: "Extensiones" },
+  "Instaladas": { es: "Instaladas" },
+  "Orientações instaladas": { es: "Orientaciones instaladas" },
+  "Guias adicionados depois da instalação, sem acesso aos dados do CRM.": { es: "Guías añadidas después de la instalación, sin acceso a los datos del CRM." },
+  "Gerenciar extensões": { es: "Gestionar extensiones" },
+  "Não foi possível conferir as orientações instaladas": { es: "No se pudieron comprobar las orientaciones instaladas" },
+  "Abra Extensões para tentar novamente e ver o estado registrado no servidor.": { es: "Abre Extensiones para intentarlo de nuevo y ver el estado registrado en el servidor." },
+  "Abre Tarefas; não lê seus dados.": { es: "Abre Tareas; no lee tus datos." },
+  "Não recebe acesso aos dados do CRM.": { es: "No recibe acceso a los datos del CRM." },
+  "Texto disponível em português.": { es: "Texto disponible en portugués." },
+  "Parte deste conteúdo está disponível apenas em português.": { es: "Parte de este contenido está disponible solo en portugués." },
+  "Adicione guias ao CRM sem entregar dados ou executar código de terceiros. Cada ação volta ao servidor antes de abrir Tarefas.": { es: "Añade guías al CRM sin entregar datos ni ejecutar código de terceros. Cada acción vuelve al servidor antes de abrir Tareas." },
+  "Buscar por nome ou descrição": { es: "Buscar por nombre o descripción" },
+  "Buscar extensões": { es: "Buscar extensiones" },
+  "Filtrar por categoria": { es: "Filtrar por categoría" },
+  "Todas as categorias": { es: "Todas las categorías" },
+  "Produtividade": { es: "Productividad" },
+  "Vendas": { es: "Ventas" },
+  "Não foi possível confirmar o estado atual": { es: "No se pudo confirmar el estado actual" },
+  "A conexão caiu sem confirmação. O pedido foi preservado pelo recibo; verifique o estado antes de tentar outra vez.": { es: "La conexión se interrumpió sin confirmación. La solicitud quedó preservada por el recibo; comprueba el estado antes de intentarlo otra vez." },
+  "Pedidos aguardando confirmação": { es: "Solicitudes pendientes de confirmación" },
+  "Os identificadores abaixo foram preservados neste navegador para evitar pedidos duplicados.": { es: "Los identificadores siguientes se conservaron en este navegador para evitar solicitudes duplicadas." },
+  "Verificar recibo": { es: "Comprobar recibo" },
+  "O servidor não encontrou esse recibo. Você pode enviar o pedido novamente.": { es: "El servidor no encontró ese recibo. Puedes enviar la solicitud de nuevo." },
+  "Seções de extensões": { es: "Secciones de extensiones" },
+  "Responsável pela instalação": { es: "Responsable de la instalación" },
+  "Adicionar catálogo revisado": { es: "Añadir catálogo revisado" },
+  "Escolha um arquivo de catálogo obtido diretamente de uma fonte em que você já confia. A origem e a revisão ficam registradas.": { es: "Elige un archivo de catálogo obtenido directamente de una fuente en la que ya confías. El origen y la revisión quedan registrados." },
+  "Escolher arquivo JSON": { es: "Elegir archivo JSON" },
+  "Registrando…": { es: "Registrando…" },
+  "Revisar e registrar catálogo": { es: "Revisar y registrar catálogo" },
+  "O que este passo comprova": { es: "Qué comprueba este paso" },
+  "Registra quem admitiu, quando, a origem e a revisão do arquivo.": { es: "Registra quién lo admitió, cuándo, el origen y la revisión del archivo." },
+  "Confere a integridade dos bytes antes de qualquer instalação.": { es: "Comprueba la integridad de los bytes antes de cualquier instalación." },
+  "O hash do arquivo não prova quem o publicou. Confirme a fonte antes de escolher.": { es: "El hash del archivo no demuestra quién lo publicó. Confirma la fuente antes de elegir." },
+  "Catálogo admitido e disponível para instalação.": { es: "Catálogo admitido y disponible para la instalación." },
+  "Nenhuma extensão instalada": { es: "Ninguna extensión instalada" },
+  "Quando a plataforma instalar um pacote revisado, ele aparecerá aqui para a organização decidir se ativa.": { es: "Cuando la plataforma instale un paquete revisado, aparecerá aquí para que la organización decida si lo activa." },
+  "Nenhuma extensão corresponde à busca": { es: "Ninguna extensión coincide con la búsqueda" },
+  "Limpe a busca ou escolha outra categoria.": { es: "Borra la búsqueda o elige otra categoría." },
+  "Nenhum catálogo revisado disponível": { es: "Ningún catálogo revisado disponible" },
+  "Adicione acima um arquivo obtido de uma fonte em que você já confia.": { es: "Añade arriba un archivo obtenido de una fuente en la que ya confías." },
+  "Peça ao responsável pela instalação para admitir um catálogo revisado.": { es: "Pide al responsable de la instalación que admita un catálogo revisado." },
+  "Esta versão não pode ser ativada": { es: "Esta versión no se puede activar" },
+  "O servidor recusou a compatibilidade desta versão.": { es: "El servidor rechazó la compatibilidad de esta versión." },
+  "Peça ao responsável pela instalação uma versão compatível.": { es: "Pide al responsable de la instalación una versión compatible." },
+  "Ativa no CRM": { es: "Activa en el CRM" },
+  "Os guias aparecem no hub do CRM.": { es: "Las guías aparecen en el centro del CRM." },
+  "A configuração fica preservada enquanto estiver desativada.": { es: "La configuración se conserva mientras esté desactivada." },
+  "Densidade dos cards": { es: "Densidad de las tarjetas" },
+  "Confortável": { es: "Cómoda" },
+  "Compacta": { es: "Compacta" },
+  "Mostrar descrição nos cards": { es: "Mostrar descripción en las tarjetas" },
+  "Abrir guia": { es: "Abrir guía" },
+  "Ative para abrir o guia.": { es: "Actívala para abrir la guía." },
+  "Salvar configuração": { es: "Guardar configuración" },
+  "Configuração salva.": { es: "Configuración guardada." },
+  "Saia do acompanhamento para configurar extensões.": { es: "Sal del modo de acompañamiento para configurar extensiones." },
+  "Este guia está pronto para uso.": { es: "Esta guía está lista para usar." },
+  "Peça a um administrador da organização para ativar este guia.": { es: "Pide a un administrador de la organización que active esta guía." },
+  "Identidade": { es: "Identidad" },
+  "Origem revisada": { es: "Origen revisado" },
+  "Permissão": { es: "Permiso" },
+  "Esta versão já está instalada.": { es: "Esta versión ya está instalada." },
+  "Instalar versão revisada": { es: "Instalar versión revisada" },
+  "Somente o responsável pela instalação pode instalar este pacote.": { es: "Solo el responsable de la instalación puede instalar este paquete." },
+  "Extensão instalada. Agora um administrador da organização pode ativá-la.": { es: "Extensión instalada. Ahora un administrador de la organización puede activarla." },
+  "Preparação iniciada. O recibo continuará visível até a conclusão.": { es: "Preparación iniciada. El recibo seguirá visible hasta que termine." },
+  "A instalação falhou. Veja o motivo no recibo e tente de novo.": { es: "La instalación falló. Vea el motivo en el recibo e inténtelo de nuevo." },
+  "Incompatível": { es: "Incompatible" },
+  "O pacote gravado não pôde ser conferido por esta versão do CRM.": { es: "El paquete guardado no pudo verificarse con esta versión del CRM." },
+  "Ela segue marcada como ativa e ocupa uma das vagas de extensões ativas até ser desativada.": { es: "Sigue marcada como activa y ocupa uno de los lugares de extensiones activas hasta que se desactive." },
+  "Desativar nesta organização": { es: "Desactivar en esta organización" },
+  "Atividade recente": { es: "Actividad reciente" },
+  "Recibos lidos do servidor; outra aba verá os mesmos estados.": { es: "Recibos leídos del servidor; otra pestaña verá los mismos estados." },
+  "Admissão de catálogo": { es: "Admisión de catálogo" },
+  "Instalação": { es: "Instalación" },
+  "Operação da plataforma": { es: "Operación de la plataforma" },
+  "Confira o catálogo admitido e tente a instalação novamente.": { es: "Comprueba el catálogo admitido e intenta la instalación de nuevo." },
+  "Revise o arquivo ou a configuração indicada e tente novamente.": { es: "Revisa el archivo o la configuración indicada e inténtalo de nuevo." },
+  "Verificar instalação": { es: "Comprobar instalación" },
+  "Cancelar preparação": { es: "Cancelar preparación" },
+  "Preparação cancelada. Uma conclusão atrasada não poderá publicar a extensão.": { es: "Preparación cancelada. Una finalización tardía no podrá publicar la extensión." },
+  "Carregando extensões…": { es: "Cargando extensiones…" },
+  "Outra pessoa alterou esta extensão. Recarregamos o valor atual; revise antes de salvar novamente.": { es: "Otra persona cambió esta extensión. Recargamos el valor actual; revísalo antes de guardar de nuevo." },
+  "Este guia não está disponível": { es: "Esta guía no está disponible" },
+  "Não foi possível confirmar o estado atual desta extensão.": { es: "No se pudo confirmar el estado actual de esta extensión." },
+  "Volte à gestão para conferir se ela está ativa e qual é o próximo passo.": { es: "Vuelve a la gestión para comprobar si está activa y cuál es el siguiente paso." },
+  "Voltar às extensões": { es: "Volver a extensiones" },
+  "Conferindo se o guia continua ativo…": { es: "Comprobando si la guía sigue activa…" },
+  "A ação não foi aberta": { es: "La acción no se abrió" },
+  "O estado foi conferido novamente. Revise o guia antes de tentar outra vez.": { es: "El estado se comprobó de nuevo. Revisa la guía antes de intentarlo otra vez." },
+  "Conferindo acesso…": { es: "Comprobando acceso…" },
+  "A ativação e a permissão serão verificadas novamente antes de abrir Tarefas.": { es: "La activación y el permiso se comprobarán de nuevo antes de abrir Tareas." },
+  "O servidor devolveu um destino que esta extensão não pode abrir.": { es: "El servidor devolvió un destino que esta extensión no puede abrir." },
+  "A conexão caiu antes de o servidor confirmar o resultado.": { es: "La conexión se interrumpió antes de que el servidor confirmara el resultado." },
+  "O servidor respondeu em um formato inesperado. Recarregue e tente novamente.": { es: "El servidor respondió en un formato inesperado. Recarga e inténtalo de nuevo." },
+  "Não foi possível concluir a operação.": { es: "No se pudo completar la operación." },
+  "Só o administrador da instalação pode gerenciar os pacotes disponíveis.": { es: "Solo el administrador de la instalación puede gestionar los paquetes disponibles." },
+  "Não foi possível confirmar a permissão de acesso.": { es: "No se pudo confirmar el permiso de acceso." },
+  "Confira os dados do pedido e tente novamente.": { es: "Comprueba los datos de la solicitud e inténtalo de nuevo." },
+  "Não foi possível confirmar o resultado. Consulte o histórico antes de repetir o pedido.": { es: "No se pudo confirmar el resultado. Consulta el historial antes de repetir la solicitud." },
+  "Envie o documento sem compressão.": { es: "Envía el documento sin compresión." },
+  "Extensão não encontrada.": { es: "Extensión no encontrada." },
+  "Falta a identificação do pedido. Recarregue a página e tente novamente.": { es: "Falta la identificación de la solicitud. Recarga la página e inténtalo de nuevo." },
+  "O documento está vazio.": { es: "El documento está vacío." },
+  "A extensão não é compatível com esta instalação.": { es: "La extensión no es compatible con esta instalación." },
+  "A origem do catálogo não é permitida.": { es: "El origen del catálogo no está permitido." },
+  "Não foi possível baixar o pacote de extensão.": { es: "No se pudo descargar el paquete de extensión." },
+  "O arquivo da extensão excede o limite permitido.": { es: "El archivo de la extensión supera el límite permitido." },
+  "O pacote baixado não corresponde ao catálogo admitido.": { es: "El paquete descargado no corresponde al catálogo admitido." },
+  "O pacote de extensão é inválido.": { es: "El paquete de extensión no es válido." },
+  "A configuração mudou em outra sessão. Recarregue antes de continuar.": { es: "La configuración cambió en otra sesión. Recarga antes de continuar." },
+  "A configuração mudou em outra sessão. Recarregue antes de salvar.": { es: "La configuración cambió en otra sesión. Recarga antes de guardar." },
+  "Catálogo não encontrado. Recarregue a lista de extensões.": { es: "Catálogo no encontrado. Recarga la lista de extensiones." },
+  "Esta extensão está desativada nesta organização. Consulte o administrador para ativá-la.": { es: "Esta extensión está desactivada en esta organización. Consulta al administrador para activarla." },
+  "Esta extensão não é compatível com a API disponível nesta instalação.": { es: "Esta extensión no es compatible con la API disponible en esta instalación." },
+  "Esta versão não está no catálogo admitido. Recarregue a lista.": { es: "Esta versión no está en el catálogo admitido. Recarga la lista." },
+  "Este pedido já foi usado com outros dados. Recarregue a página.": { es: "Esta solicitud ya se usó con otros datos. Recarga la página." },
+  "Este pedido mudou de estado. Consulte o histórico antes de continuar.": { es: "Esta solicitud cambió de estado. Consulta el historial antes de continuar." },
+  "Já existe conteúdo diferente para esta versão. Peça uma nova versão ao mantenedor.": { es: "Ya existe contenido diferente para esta versión. Pide una nueva versión al mantenedor." },
+  "Já existe uma preparação em andamento. Em Atividade recente, quem pediu pode retomá-la, e qualquer responsável pela instalação pode cancelá-la.": { es: "Ya hay una preparación en curso. En Actividad reciente, quien la pidió puede retomarla, y cualquier responsable de la instalación puede cancelarla." },
+  "Não foi possível concluir a preparação. Confira o catálogo e faça um novo pedido.": { es: "No se pudo completar la preparación. Comprueba el catálogo y crea una nueva solicitud." },
+  "Não foi possível ler o pacote instalado. Consulte o administrador da instalação.": { es: "No se pudo leer el paquete instalado. Consulta al administrador de la instalación." },
+  "O arquivo recebido não corresponde à versão admitida. Peça ao mantenedor para conferir a publicação.": { es: "El archivo recibido no corresponde a la versión admitida. Pide al mantenedor que compruebe la publicación." },
+  "O catálogo mudou durante a preparação. Recarregue a lista antes de instalar.": { es: "El catálogo cambió durante la preparación. Recarga la lista antes de instalar." },
+  "O catálogo tem uma revisão anterior ou diferente da já admitida. Peça o arquivo atual ao mantenedor.": { es: "El catálogo tiene una revisión anterior o distinta de la ya admitida. Pide el archivo actual al mantenedor." },
+  "O limite de catálogos desta instalação foi atingido.": { es: "Se alcanzó el límite de catálogos de esta instalación." },
+  "O limite de extensões ativas foi atingido. Desative uma antes de ativar outra.": { es: "Se alcanzó el límite de extensiones activas. Desactiva una antes de activar otra." },
+  "O limite de pacotes desta instalação foi atingido.": { es: "Se alcanzó el límite de paquetes de esta instalación." },
+  "O pacote local precisa ser conferido pelo administrador da instalação.": { es: "El paquete local debe ser comprobado por el administrador de la instalación." },
+  "O sistema está sendo atualizado. Aguarde a conclusão para alterar extensões.": { es: "El sistema se está actualizando. Espera a que termine para modificar extensiones." },
+  "Pedido não encontrado. Consulte o histórico da instalação.": { es: "Solicitud no encontrada. Consulta el historial de la instalación." },
+  "Pedido não encontrado.": { es: "Solicitud no encontrada." },
+  "Seu acesso mudou. Entre novamente para continuar.": { es: "Tu acceso cambió. Vuelve a entrar para continuar." },
+  "A instalação já havia sido concluída; o recibo foi atualizado.": { es: "La instalación ya había terminado; el recibo se actualizó." },
+  "A preparação já havia falhado; o recibo foi atualizado.": { es: "La preparación ya había fallado; el recibo se actualizó." },
+  "Guias instalados para orientar o trabalho no CRM, com permissões e estado visíveis.": { es: "Guías instaladas para orientar el trabajo en el CRM, con permisos y estado visibles." },
+  "Envie um documento JSON.": { es: "Envía un documento JSON." },
+  "O envio foi interrompido. Tente novamente.": { es: "El envío se interrumpió. Inténtalo de nuevo." },
+  "Não foi possível confirmar o cancelamento. Verifique o recibo antes de repetir a ação.": { es: "No se pudo confirmar la cancelación. Comprueba el recibo antes de repetir la acción." },
+  "Admitindo…": { es: "Admitiendo…" },
+  "Admitir catálogo": { es: "Admitir catálogo" },
+  "Confere que o arquivo não mudou antes de qualquer instalação.": { es: "Comprueba que el archivo no haya cambiado antes de cualquier instalación." },
+  "O arquivo não comprova quem o publicou. Confirme a fonte antes de escolher.": { es: "El archivo no demuestra quién lo publicó. Confirma la fuente antes de elegir." },
+  "Adicione guias ao CRM sem entregar dados ou executar código de terceiros. Antes de abrir Tarefas, o acesso e a ativação são conferidos novamente.": { es: "Añade guías al CRM sin entregar datos ni ejecutar código de terceros. Antes de abrir Tareas, el acceso y la activación se comprueban de nuevo." },
+  "Os recibos abaixo foram preservados neste navegador para evitar pedidos duplicados.": { es: "Los recibos siguientes se conservaron en este navegador para evitar solicitudes duplicadas." },
+  "Este histórico é compartilhado entre abas e mostra o resultado confirmado.": { es: "Este historial se comparte entre pestañas y muestra el resultado confirmado." },
+  "Adicione guias que orientam o trabalho e só podem abrir Tarefas, sem receber dados do CRM. Escolha um catálogo revisado de uma fonte em que você confia.": { es: "Añade guías que orientan el trabajo y solo pueden abrir Tareas, sin recibir datos del CRM. Elige un catálogo revisado de una fuente en la que confíes." },
+  "O arquivo JSON pode ter até 512 KiB.": { es: "El archivo JSON puede tener hasta 512 KiB." },
+  "Antes de admitir": { es: "Antes de admitir" },
+  "A organização ativa mudou em outra aba. Recarregue a página antes de continuar.": { es: "La organización activa cambió en otra pestaña. Recarga la página antes de continuar." },
+  "Falta o contexto da organização. Recarregue a página e tente novamente.": { es: "Falta el contexto de la organización. Recarga la página e inténtalo de nuevo." },
+  "O arquivo pode ter até 512 KiB. Escolha um arquivo menor.": { es: "El archivo puede tener hasta 512 KiB. Elige un archivo más pequeño." },
+  "Não foi possível ler este arquivo. Escolha o catálogo novamente e tente outra vez.": { es: "No se pudo leer este archivo. Elige el catálogo de nuevo e inténtalo otra vez." },
+  "Não foi possível confirmar o resultado da verificação. Consulte o recibo antes de repetir a ação.": { es: "No se pudo confirmar el resultado de la comprobación. Consulta el recibo antes de repetir la acción." },
+  "Este navegador não conseguiu guardar o recibo. Libere o armazenamento deste site antes de enviar o pedido.": { es: "Este navegador no pudo guardar el recibo. Habilita el almacenamiento de este sitio antes de enviar la solicitud." },
+  "Atualize o estado das extensões antes de enviar um novo pedido.": { es: "Actualiza el estado de las extensiones antes de enviar una nueva solicitud." },
+  "Aguarde enquanto os recibos deste navegador são conferidos.": { es: "Espera mientras se comprueban los recibos de este navegador." },
+  "O estado exibido está desatualizado": { es: "El estado mostrado está desactualizado" },
+  "Os pedidos estão bloqueados neste navegador": { es: "Las solicitudes están bloqueadas en este navegador" },
+  "Libere o armazenamento do site e recarregue a página para continuar com segurança.": { es: "Habilita el almacenamiento del sitio y recarga la página para continuar de forma segura." },
+  "Oriente o trabalho com novos guias": { es: "Orienta el trabajo con nuevas guías" },
+  "Preparação cancelada. Este pedido não instalará a extensão.": { es: "Preparación cancelada. Esta solicitud no instalará la extensión." },
+  "O servidor devolveu um recibo sem o contexto esperado. Recarregue a página antes de continuar.": { es: "El servidor devolvió un recibo sin el contexto esperado. Recarga la página antes de continuar." },
+  // Atualizar, desfazer a última troca e remover da instalação.
+  "Há uma preparação desta extensão em andamento. Acompanhe ou cancele o pedido em Atividade recente.": { es: "Hay una preparación de esta extensión en curso. Sigue o cancela la solicitud en Actividad reciente." },
+  "Há uma extensão em preparação. Abra Extensões: em Atividade recente, quem pediu pode retomar o pedido, e qualquer responsável pela instalação pode cancelá-lo antes de atualizar o sistema.": { es: "Hay una extensión en preparación. Abre Extensiones: en Actividad reciente, quien la pidió puede retomar la solicitud, y cualquier responsable de la instalación puede cancelarla antes de actualizar el sistema." },
+  "O pedido foi cancelado antes de concluir. A versão instalada continua a mesma.": { es: "La solicitud se canceló antes de terminar. La versión instalada sigue siendo la misma." },
+  "O pedido foi cancelado antes de concluir. Nada foi instalado.": { es: "La solicitud se canceló antes de terminar. No se instaló nada." },
+  "Troca de versão cancelada. A versão instalada continua a mesma.": { es: "Cambio de versión cancelado. La versión instalada sigue siendo la misma." },
+  "A atualização já havia sido concluída; o recibo foi atualizado.": { es: "La actualización ya había terminado; el recibo se actualizó." },
+  "Atualização ou troca de versão": { es: "Actualización o cambio de versión" },
+  "Pedido de outro responsável pela instalação: só quem pediu pode retomar. Você pode cancelar.": { es: "Solicitud de otro responsable de la instalación: solo quien la pidió puede retomarla. Puedes cancelarla." },
+  "Versão trocada. As organizações que a usavam continuam com ela ativa.": { es: "Versión cambiada. Las organizaciones que la usaban la siguen teniendo activa." },
+  "A troca de versão já havia sido concluída; o recibo foi atualizado.": { es: "El cambio de versión ya había terminado; el recibo se actualizó." },
+  "Desfazer a última troca": { es: "Deshacer el último cambio" },
+  "Remoção da instalação": { es: "Retirada de la instalación" },
+  "Estava ativa até ser removida da instalação em {data}. A versão reinstalada não pode ser ativada; peça ao responsável pela instalação uma versão compatível.": { es: "Estaba activa hasta que se quitó de la instalación el {data}. La versión reinstalada no se puede activar; pide al responsable de la instalación una versión compatible." },
+  "Há uma preparação desta extensão em andamento. Acompanhe ou cancele o pedido em Atividade recente antes de desfazer ou remover.": { es: "Hay una preparación de esta extensión en curso. Sigue o cancela la solicitud en Actividad reciente antes de deshacer o quitar." },
+  "Verificar troca de versão": { es: "Comprobar cambio de versión" },
+  "Cancelar troca de versão": { es: "Cancelar cambio de versión" },
+  "1 organização a usava e não volta a vê-la sozinha: o administrador dela precisa ativar de novo.": { es: "1 organización la usaba y no vuelve a verla por sí sola: su administrador tiene que activarla de nuevo." },
+  "1 organização com ela ativa": { es: "1 organización con ella activa" },
+  "1 organização com ela ativa deixa de ver os guias agora; a configuração dela fica guardada.": { es: "1 organización con ella activa deja de ver las guías ahora; su configuración queda guardada." },
+  "1 organização desativada": { es: "1 organización desactivada" },
+  "1 organização está com esta extensão ativa.": { es: "1 organización tiene esta extensión activa." },
+  "1 organização tem esta extensão ativa e continua com ela ativa, com a configuração de hoje.": { es: "1 organización tiene esta extensión activa y la sigue teniendo activa, con la configuración de hoy." },
+  "A extensão mudou em outra sessão. Recarregamos o estado atual; revise antes de repetir.": { es: "La extensión cambió en otra sesión. Recargamos el estado actual; revísalo antes de repetir." },
+  "A versão instalada continua a mesma. Confira o catálogo admitido e peça a troca de novo.": { es: "La versión instalada sigue siendo la misma. Comprueba el catálogo admitido y pide el cambio de nuevo." },
+  "A versão {atual} sai de todas as organizações agora e a {anterior} volta a valer. Nada é baixado.": { es: "La versión {atual} sale de todas las organizaciones ahora y la {anterior} vuelve a valer. No se descarga nada." },
+  "A versão {versao} não está mais no catálogo admitido.": { es: "La versión {versao} ya no está en el catálogo admitido." },
+  "A versão {versao} não é compatível com esta versão do CRM.": { es: "La versión {versao} no es compatible con esta versión del CRM." },
+  "A versão {versao} é substituída em todas as organizações.": { es: "La versión {versao} se reemplaza en todas las organizaciones." },
+  "A versão é baixada de novo do catálogo.": { es: "La versión se descarga de nuevo del catálogo." },
+  "Atualização": { es: "Actualización" },
+  "Atualização cancelada. A versão instalada continua a mesma.": { es: "Actualización cancelada. La versión instalada sigue siendo la misma." },
+  "Atualizar para {versao}": { es: "Actualizar a {versao}" },
+  "Atualizar {titulo} para a versão {versao}?": { es: "¿Actualizar {titulo} a la versión {versao}?" },
+  "Cancelar atualização": { es: "Cancelar actualización" },
+  "Depois você pode desfazer esta troca, mesmo com o catálogo fora do ar.": { es: "Después puedes deshacer este cambio, incluso con el catálogo fuera de línea." },
+  "Desfazer a troca": { es: "Deshacer el cambio" },
+  "Desfazer a última troca (volta para {versao})": { es: "Deshacer el último cambio (vuelve a {versao})" },
+  "Ela foi removida em {data}.": { es: "Se quitó el {data}." },
+  "Em todas as organizações": { es: "En todas las organizaciones" },
+  "Estava ativa até ser removida da instalação em {data}. Ative de novo para voltar a mostrar os guias.": { es: "Estaba activa hasta que se quitó de la instalación el {data}. Actívala de nuevo para volver a mostrar las guías." },
+  "Estava ativa até ser removida da instalação em {data}. Peça a um administrador da organização para ativar de novo.": { es: "Estaba activa hasta que se quitó de la instalación el {data}. Pide a un administrador de la organización que la active de nuevo." },
+  "Extensão atualizada. As organizações que a usavam continuam com ela ativa.": { es: "Extensión actualizada. Las organizaciones que la usaban la siguen teniendo activa." },
+  "Extensão reinstalada. Cada organização precisa ativá-la de novo.": { es: "Extensión reinstalada. Cada organización tiene que activarla de nuevo." },
+  "Extensão removida de todas as organizações.": { es: "Extensión quitada de todas las organizaciones." },
+  "Instalada hoje: versão {versao}.": { es: "Instalada hoy: versión {versao}." },
+  "Já instalada a partir de outra origem ({origem}, versão {versao}).": { es: "Ya instalada desde otro origen ({origem}, versión {versao})." },
+  "Nenhuma organização a usava quando foi removida.": { es: "Ninguna organización la usaba cuando se quitó." },
+  "Nenhuma organização está com ela ativa agora.": { es: "Ninguna organización la tiene activa ahora." },
+  "Nenhuma organização está com ela ativa agora; a configuração de cada uma fica guardada.": { es: "Ninguna organización la tiene activa ahora; la configuración de cada una queda guardada." },
+  "Nenhuma organização está com esta extensão ativa.": { es: "Ninguna organización tiene esta extensión activa." },
+  "Nesta organização": { es: "En esta organización" },
+  "Não há desfazer: para reinstalar, o catálogo precisa estar no ar e listar a versão, e cada organização ativa de novo.": { es: "No hay forma de deshacer: para reinstalar, el catálogo tiene que estar en línea y listar la versión, y cada organización la activa de nuevo." },
+  "O card indicado não existe na versão {versao} desta extensão.": { es: "La tarjeta indicada no existe en la versión {versao} de esta extensión." },
+  "O responsável pela instalação removeu esta extensão em {data}. Os guias saíram de todas as organizações; a configuração desta organização ficou guardada.": { es: "El responsable de la instalación quitó esta extensión el {data}. Las guías salieron de todas las organizaciones; la configuración de esta organización quedó guardada." },
+  "Reinstalar": { es: "Reinstalar" },
+  "Reinstalar versão {versao}": { es: "Reinstalar versión {versao}" },
+  "Reinstalar {titulo}?": { es: "¿Reinstalar {titulo}?" },
+  "Remover da instalação": { es: "Quitar de la instalación" },
+  "Remover de todas": { es: "Quitar de todas" },
+  "Remover {titulo} de todas as organizações?": { es: "¿Quitar {titulo} de todas las organizaciones?" },
+  "Removida": { es: "Quitada" },
+  "Removida da instalação em {data}.": { es: "Quitada de la instalación el {data}." },
+  "Remoção": { es: "Retirada" },
+  "Troca de versão": { es: "Cambio de versión" },
+  "Troca desfeita": { es: "Cambio deshecho" },
+  "Troca desfeita: a versão {versao} voltou a valer em todas as organizações.": { es: "Cambio deshecho: la versión {versao} volvió a valer en todas las organizaciones." },
+  "Trocar": { es: "Cambiar" },
+  "Trocar para {versao}": { es: "Cambiar a {versao}" },
+  "Trocar {titulo} para a versão {versao}?": { es: "¿Cambiar {titulo} a la versión {versao}?" },
+  "Verificar atualização": { es: "Comprobar actualización" },
+  "Voltar {titulo} para a versão {versao}?": { es: "¿Volver {titulo} a la versión {versao}?" },
+  "nenhuma organização com ela ativa": { es: "ninguna organización con ella activa" },
+  "nenhuma organização desativada": { es: "ninguna organización desactivada" },
+  "{n} organizações a usavam, e nenhuma volta a vê-la sozinha: o administrador de cada uma precisa ativar de novo.": { es: "{n} organizaciones la usaban, y ninguna vuelve a verla por sí sola: el administrador de cada una tiene que activarla de nuevo." },
+  "{n} organizações com ela ativa": { es: "{n} organizaciones con ella activa" },
+  "{n} organizações com ela ativa deixam de ver os guias agora; a configuração de cada uma fica guardada.": { es: "{n} organizaciones con ella activa dejan de ver las guías ahora; la configuración de cada una queda guardada." },
+  "{n} organizações desativadas": { es: "{n} organizaciones desactivadas" },
+  "{n} organizações estão com esta extensão ativa.": { es: "{n} organizaciones tienen esta extensión activa." },
+  "{n} organizações têm esta extensão ativa e continuam com ela ativa, com a configuração de hoje.": { es: "{n} organizaciones tienen esta extensión activa y la siguen teniendo activa, con la configuración de hoy." },
+  "A extensão mudou em outra sessão. Recarregue antes de continuar.": { es: "La extensión cambió en otra sesión. Recarga antes de continuar." },
+  "Este card não existe na versão instalada. Recarregamos o guia.": { es: "Esta tarjeta no existe en la versión instalada. Recargamos la guía." },
+  "Este pedido foi registrado por uma versão mais nova do sistema.": { es: "Esta solicitud fue registrada por una versión más nueva del sistema." },
+  "Não há troca para desfazer nesta extensão.": { es: "No hay ningún cambio para deshacer en esta extensión." },
+  "O responsável pela instalação removeu esta extensão de todas as organizações.": { es: "El responsable de la instalación quitó esta extensión de todas las organizaciones." },
+
+  // ═══ Tags: a tela do vocabulário de etiquetas, da fatia S4 da #852 ═══
+  //
+  // A tela nasceu com dez chamadas `t()` e o espanhol ficou para trás: a lista
+  // inteira caía no português em plena tela traduzida (o conferidor de chaves
+  // só enxerga o que já está escrito, e a tela é nova). Vocabulário herdado do
+  // resto do dicionário — `funil` é `embudo`, `Inbox` continua `Inbox`.
+  "As etiquetas que os agentes, o Inbox e o funil usam nesta organização. Renomear ou juntar corrige também as regras de agente que escrevem a etiqueta, na mesma operação.": {
+    es: "Las etiquetas que usan los agentes, el Inbox y el embudo en esta organización. Renombrar o unir corrige también las reglas de agente que escriben la etiqueta, en la misma operación.",
+  },
+  "Não foi possível carregar as etiquetas agora. Recarregue a página.": {
+    es: "No se pudieron cargar las etiquetas ahora. Recarga la página.",
+  },
+  "Nenhuma etiqueta nesta organização ainda. Elas aparecem aqui conforme os agentes, o Inbox e o funil usarem.": {
+    es: "Aún no hay ninguna etiqueta en esta organización. Aparecen aquí a medida que los agentes, el Inbox y el embudo las usen.",
+  },
+  "Etiquetas da organização e onde são usadas": {
+    es: "Etiquetas de la organización y dónde se usan",
+  },
+  "Regras de agente": {
+    es: "Reglas de agente",
+  },
+  "em uso, fora do vocabulário": {
+    es: "en uso, fuera del vocabulario",
+  },
+  "Etiqueta de destino": {
+    es: "Etiqueta de destino",
+  },
+  "Escolha a etiqueta que fica": {
+    es: "Elige la etiqueta que queda",
+  },
+  "Novo nome": {
+    es: "Nombre nuevo",
+  },
+  "Aplicando...": {
+    es: "Aplicando...",
+  },
+  // ── Frases do painel de etiquetas que ANTES eram template literal ──────────
+  // `traduzir()` casa a string EXATA: uma frase montada em runtime
+  // (`t(`Renomear "${tag}" para:`)`) nunca casa chave nenhuma, e o painel inteiro
+  // saía em português para quem escolheu espanhol — sem o guarda de i18n ver
+  // nada, porque ele só registra `StringLiteral` e `NoSubstitutionTemplateLiteral`.
+  // O dado agora entra FORA do `t()`, e o que sobra são estas chaves estáticas.
+  "para:": { es: "a:" },
+  "em outra etiqueta existente:": { es: "en otra etiqueta existente:" },
+  // `"de"` NÃO entra aqui: a chave já existe mais acima no arquivo (linha ~896),
+  // e repeti-la é TS1117 — o `as const` do dicionário reprova chave duplicada.
+  "contato(s),": { es: "contacto(s)," },
+  "lead(s) e": { es: "lead(s) y" },
+  "conversa(s).": { es: "conversación(es)." },
+  "Atenção:": { es: "Atención:" },
+  "regra(s) de agente continuam escrevendo esta etiqueta. Excluir aqui não apaga a regra — o agente vai recriar a etiqueta no próximo atendimento.": {
+    es: "regla(s) de agente siguen escribiendo esta etiqueta. Eliminar aquí no borra la regla — el agente volverá a crear la etiqueta en la próxima atención.",
+  },
+  "Etiqueta removida de": { es: "Etiqueta eliminada de" },
+  "Etiqueta atualizada em": { es: "Etiqueta actualizada en" },
+  "registro(s).": { es: "registro(s)." },
+  "registro(s) e em": { es: "registro(s) y en" },
+  "regra(s) de agente.": { es: "regla(s) de agente." },
+  // As frases de recusa do servidor. Três delas não tinham entrada: o argumento
+  // de `t()` ali é uma expressão `??`, que o guarda também não resolve.
+  "Confira a etiqueta e o novo nome.": { es: "Revisa la etiqueta y el nombre nuevo." },
+  "Só um gerente ou administrador da organização pode mudar as etiquetas.": {
+    es: "Solo un gerente o administrador de la organización puede cambiar las etiquetas.",
+  },
+  "Não foi possível concluir agora. Tente de novo.": {
+    es: "No se pudo completar ahora. Inténtalo de nuevo.",
+  },
+  "Não foi possível falar com o servidor. Recarregue a página e confira antes de tentar de novo.": {
+    es: "No se pudo contactar al servidor. Recarga la página y comprueba antes de intentarlo de nuevo.",
+  },
+  "Mostrando as 500 primeiras etiquetas em ordem alfabética. Se a que você procura não está aqui, arrume primeiro as que aparecem.": {
+    es: "Mostrando las primeras 500 etiquetas en orden alfabético. Si la que buscas no está aquí, arregla primero las que aparecen.",
+  },
+  // A recusa `mfa_required` do painel de etiquetas: a única frase do mapa de erros
+  // que ficou sem entrada — medida pela tela em
+  // `tests/unit/tags-vocabulario-painel-em-espanhol.test.tsx`.
+  "Confirme o segundo fator para mudar as etiquetas.": {
+    es: "Confirma el segundo factor para cambiar las etiquetas.",
+  },
+  "arquivado no acervo": { es: "archivado en el acervo" },
+  "Um material marcado aqui foi arquivado no acervo — o agente não lê mais ele.": { es: "Un material marcado aquí fue archivado en el acervo — el agente ya no lo lee." },
+  "Materiais marcados aqui foram arquivados no acervo — o agente não lê mais eles.": { es: "Materiales marcados aquí fueron archivados en el acervo — el agente ya no los lee." },
+  "Desmarque para voltar a salvar.": { es: "Desmárcalo para volver a guardar." },
 };
 
 /**

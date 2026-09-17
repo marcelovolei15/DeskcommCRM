@@ -123,7 +123,7 @@ pnpm install          # deps (frozen-lockfile no CI)
 pnpm dev              # dev server
 pnpm build            # next build
 pnpm lint             # eslint
-pnpm typecheck        # tsc --noEmit (estrito)
+pnpm typecheck        # tsc --noEmit -p tsconfig.typecheck.json (inclui tests/)
 pnpm test:unit        # vitest — EXCLUI tests/invariants, tests/e2e e tests/journeys (lista viva em vitest.config.ts → exclude)
 pnpm test:db          # invariantes de banco + gate do baseline (PRECISA de Docker)
 pnpm test:e2e         # Playwright (PRECISA de app rodando + banco semeado)
@@ -147,9 +147,10 @@ usuário, rode `pnpm test:e2e` com evidência visual. Se toca `Dockerfile*`, `do
 **O que o CI cobre.** `.github/workflows/ci.yml`: `verify` = os passos do job, na ordem —
 typecheck, lint, `lint:channels`, `test:unit` e `test:shell` hoje, e `pnpm lint` sozinho **não**
 cobre os dois últimos (liste em vez de acreditar nesta linha:
-`awk '/^  verify:/,/^  invariants:/' .github/workflows/ci.yml | grep -A1 'name:'`);
-`invariants` = `pnpm test:db` (isolamento RLS + invariantes de governança contra Postgres
-efêmero pg15). `.github/workflows/perf.yml`: `build-and-size` = `pnpm build`.
+`awk '/^  verify:/,/^  invariants-majors:/' .github/workflows/ci.yml | grep -A1 'name:'`);
+`invariants` = fachada sobre a matriz `invariants-majors`, que roda `pnpm test:db` (isolamento
+RLS + invariantes de governança) e `pnpm test:db:update` (atualizar banco COM dados) uma vez por
+major de Postgres suportado. `.github/workflows/perf.yml`: `build-and-size` = `pnpm build`.
 `.github/workflows/e2e.yml` roda as specs Playwright contra um Supabase local de verdade com
 o `baseline.sql` aplicado — o mesmo banco que o self-hoster tem. **É check obrigatório** — a
 data de ativação não é auditável pelo repositório, e a lista viva está logo abaixo, com o
@@ -435,9 +436,29 @@ Lei completa em [`docs/doctrine/packaging.md`](docs/doctrine/packaging.md). O n�
 
 `pnpm test:shell` é o único gate que exercita o kit. Rode-o.
 
+## Extensões — se sua mudança muda comportamento
+
+Lei completa em [`docs/doctrine/extensoes.md`](docs/doctrine/extensoes.md); contrato vigente em
+[`docs/specs/extensoes-declarativas-v1.md`](docs/specs/extensoes-declarativas-v1.md). Declare o
+destino (núcleo, extensão, ambos ou infraestrutura) respondendo: **se nenhuma organização ativar
+isto, a operação comum continua inteira?** O não-negociável:
+
+- **O núcleo continua útil com zero extensões.** Nenhuma jornada do núcleo depende de extensão ativa.
+- **Extensão pede capacidade nomeada** e não importa código interno, não lê o banco e não recebe
+  cliente Supabase, ambiente ou dados do CRM. Instalar não concede autoridade.
+- **A instância decide o pacote; a organização decide o uso.** A plataforma não reativa decisão da
+  organização.
+- **Toda operação é recibo idempotente com saída pela tela; toda troca de ponteiro exige a revisão
+  que a tela viu.** Remover é lógico e preserva dados e configuração.
+- **Não anuncie SDK, código isolado ou marketplace público**, e não extraia do núcleo recurso já
+  distribuído sem equivalência e migração.
+- **Módulo oficial com dados não põe tabela no baseline para todos**
+  ([ADR-0002](docs/adr/0002-tabelas-de-modulo-num-banco-so.md)): um banco só, `public`, tabelas criadas
+  por função provisionadora fixa quando o módulo é instalado na instância.
+
 ## Critério de conclusão
 
-Vale a **Definition of Done em [`CLAUDE.md`](CLAUDE.md)** — conte lá em vez de confiar num número aqui (`sed -n '/^## Definition of Done/,/^Um staff engineer/p' CLAUDE.md | grep -cE '^[0-9]+\. '`; esta linha já disse 15 e o DoD tem 16). A régua tem que DELIMITAR a seção: a primeira versão desta linha oferecia `grep -c '^[0-9]\+\. \*\*' CLAUDE.md`, que devolve **25** — casa toda linha numerada em negrito do arquivo (anti-patterns, packaging, higiene de branches, migrations) e perde os itens 1–10 do próprio DoD, que não são negrito. Trocar o número pelo comando só ajuda se o comando responder à pergunta. Não declare pronto
+Vale a **Definition of Done em [`CLAUDE.md`](CLAUDE.md)** — conte lá em vez de confiar num número aqui (`sed -n '/^## Definition of Done/,/^Um staff engineer/p' CLAUDE.md | grep -cE '^[0-9]+\. '`; esta linha já disse 15 quando o DoD tinha 16). A régua tem que DELIMITAR a seção: a primeira versão desta linha oferecia `grep -c '^[0-9]\+\. \*\*' CLAUDE.md`, que devolve **25** — casa toda linha numerada em negrito do arquivo (anti-patterns, packaging, higiene de branches, migrations) e perde os itens 1–10 do próprio DoD, que não são negrito. Trocar o número pelo comando só ajuda se o comando responder à pergunta. Não declare pronto
 sem: typecheck/lint zerados, testes relevantes verdes, RLS testada se tocou tabela
 tenant-aware, migration + baseline + MANIFEST se mudou schema, prova visual se mudou UI, e a
 regra de packaging acima se mudou o artefato que o self-hoster instala.
@@ -447,7 +468,8 @@ regra de packaging acima se mudou o artefato que o self-hoster instala.
 O repositório embute guias em `.agents/skills/` — lidos por Codex, Cursor, OpenCode e
 Antigravity; o Claude Code lê o espelho em `.claude/skills/` (`pnpm skills:sync` regrava, e
 `tests/unit/skills-embutidas.test.ts` reprova divergência). Carregue o guia quando o pedido
-casar, mesmo que a pessoa não saiba que ele existe:
+casar, mesmo que a pessoa não saiba que ele existe. Fora de um clone (ou num clone antigo),
+`bash scripts/instalar-guias.sh` liga os guias nas pastas globais dos cinco CLIs:
 
 | situação | guia |
 |---|---|
@@ -457,6 +479,12 @@ casar, mesmo que a pessoa não saiba que ele existe:
 | o agente responde errado, passa tudo para humano, não usa a agenda; melhorar o prompt | `deskcomm-prompt` |
 | contribuir: corrigir bug, abrir ou atualizar PR, migration, conflito com a `main` | `deskcomm-contribuir` — que fica quieto quando `bash .agents/skills/deskcomm-contribuir/scripts/quem-sou.sh` responde `mantenedor` |
 | escrever ou revisar código aqui | `deskcomm-doutrina` (as três regras que mais custam) e `sistema-vivo` (o gate de arquitetura) |
+
+Os guias têm vitrine pública em [deskcomm.com.br/guias](https://www.deskcomm.com.br/guias) (pt-BR,
+en, es), escrita à mão no repositório `deskcomm-site` (`conteudo/guias.ts`). Guia criado,
+renomeado ou com comando novo → o PR avisa que aquela página precisa acompanhar. Ela sai do mesmo
+PR do `deskcomm-site` que a página de changelog; quem quiser saber se já está no ar usa o `curl` da
+seção "A vitrine" em [`docs/doctrine/versionamento.md`](docs/doctrine/versionamento.md).
 
 ## Regra final — não invente
 
@@ -472,6 +500,11 @@ nunca o número. O número é calculado a partir do conjunto; confira com `pnpm 
 corte com `pnpm release:cortar`. Régua e porquê: [`docs/doctrine/versionamento.md`](docs/doctrine/versionamento.md).
 Quem instalou lê o [`CHANGELOG.md`](CHANGELOG.md) antes de rodar `update.sh` — mudança que exige
 ação manual aparece sob "⚠️ Requer atenção".
+Toda versão publicada aparece também em [deskcomm.com.br/changelog](https://www.deskcomm.com.br/changelog)
+(pt-BR, en, es): a LP lê o `CHANGELOG.md` da `main`, ninguém escreve release no site, e o último
+passo do corte reprova se a versão não chegou lá. Mudar o cabeçalho `## [X.Y.Z] — AAAA-MM-DD` quebra
+essa página — ver "A vitrine" em `docs/doctrine/versionamento.md`. Enquanto as três páginas não
+responderem 200, esse passo reprova TODO corte; o `curl` que mede isso abre aquela seção.
 
 **Regra final — não invente.** Este repositório tem PRDs, specs, regras de negócio e doutrina
 escritos. Nunca invente regra de negócio, número, SLA ou comportamento de produto. Se a regra não
