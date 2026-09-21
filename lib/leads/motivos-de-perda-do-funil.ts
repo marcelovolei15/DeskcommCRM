@@ -20,6 +20,7 @@
 
 import { CANONICAL_LOST_REASONS } from "@/lib/schemas/leads";
 import { pipelineConfigPatchSchema } from "@/lib/schemas/settings";
+import { MOTIVO_DA_TRANSFERENCIA } from "@/lib/leads/motivo-da-perda";
 
 /** O valor canônico de "outro": a saída de quem não acha o motivo na lista. */
 export const OUTRO = "other";
@@ -83,10 +84,22 @@ export interface OpcaoDeMotivo {
  * porque foi ela que o operador escreveu para o negócio dele — e é ela que ele
  * espera ver no relatório de perdas. Sem nada cadastrado, o padrão do produto
  * continua sendo o padrão. "Outro" entra sempre, nas duas situações.
+ *
+ * ⚠️ O MOTIVO DE SISTEMA NÃO SE OFERECE — em nenhuma das duas situações.
+ * `moved_to_another_pipeline` é o motivo com que a troca de funil encerra a
+ * origem, e ele é canônico (o trigger o aceita). Só que a migration 0266 o
+ * EXCLUI de `fn_attendant_metrics` e `fn_atrito_metrics`: ele existe justamente
+ * para a transferência não engordar o número de perdas de ninguém. Oferecido na
+ * janela, ele vira o caminho de UM clique para tirar uma perda comercial real da
+ * métrica — sem rastro para quem audita, porque o motivo gravado parece legítimo.
+ * Quem transfere continua podendo gravá-lo; quem está perdendo o negócio, não o
+ * escolhe na lista.
  */
 export function opcoesDeMotivoDePerda(motivosCadastrados: readonly string[]): OpcaoDeMotivo[] {
   const doFunil = motivosCadastrados.length > 0;
-  const base: string[] = doFunil ? [...motivosCadastrados] : [...CANONICOS];
+  const base: string[] = (doFunil ? [...motivosCadastrados] : [...CANONICOS]).filter(
+    (valor) => valor !== MOTIVO_DA_TRANSFERENCIA,
+  );
   const opcoes: OpcaoDeMotivo[] = base.map((valor) => ({ valor, doFunil }));
   if (!base.includes(OUTRO)) opcoes.push({ valor: OUTRO, doFunil: false });
   return opcoes;

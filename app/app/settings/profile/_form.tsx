@@ -23,11 +23,13 @@ import {
 } from "@/lib/schemas/settings";
 
 const TIMEZONES = [
+  "Africa/Luanda",
   "America/Sao_Paulo",
   "America/Manaus",
   "America/Belem",
   "America/Recife",
   "America/Fortaleza",
+  "Europe/Lisbon",
   "UTC",
 ];
 

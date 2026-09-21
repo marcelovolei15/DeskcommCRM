@@ -129,10 +129,10 @@ export async function previewGateContext(
     internalVocabularyEnforced: true,
   };
 }
-const SCENARIO_READS = new Set([
+export const SCENARIO_READS = new Set([
   'crm_list_pipelines',
   'crm_list_stages',
-  'crm_list_appointment_types',
+  'crm_list_event_types',
   'crm_find_free_slots',
 ]);
 /** Unknown tools fail closed. A write proposal never calls its original execute. */

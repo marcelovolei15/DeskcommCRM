@@ -53,6 +53,9 @@ export interface McpToolMeta extends CapacidadeSelecionavel {
   o_que_toca: string;
   risco: ToolRisk;
   pacotes: ReadonlyArray<ToolBundle>;
+  /** `false` = capacidade do harness: mostra, explica e não deixa marcar. */
+  marcavel: boolean;
+  motivo_nao_marcavel: string | null;
 }
 
 interface Props {
@@ -114,7 +117,7 @@ function FichaCapacidade({
         className="mt-1 h-4 w-4 shrink-0 rounded-md border-border accent-primary"
         checked={marcada}
         onChange={onToggle}
-        disabled={disabled || bloqueada}
+        disabled={disabled || (bloqueada && !marcada)}
         aria-label={t(capacidade.rotulo)}
       />
       <span className="flex-1 space-y-1">
@@ -124,6 +127,16 @@ function FichaCapacidade({
           <span className="text-xs text-muted-foreground">· {t(capacidade.o_que_toca)}</span>
         </span>
         <span className="block text-xs text-muted-foreground">{t(capacidade.explicacao)}</span>
+        {capacidade.motivo_nao_marcavel ? (
+          // O motivo do descarte, NA TELA. Antes disto o dono marcava e o engine
+          // jogava fora; o aviso existia só no log do worker, que ninguém lê.
+          <span
+            data-testid={`motivo-nao-marcavel-${capacidade.name}`}
+            className="block text-xs text-sky-700 dark:text-sky-400"
+          >
+            {t(capacidade.motivo_nao_marcavel)}
+          </span>
+        ) : null}
         {mostrarNomeTecnico ? (
           <code className="block font-mono text-[11px] text-muted-foreground">
             {capacidade.name}
@@ -322,7 +335,7 @@ export function ToolPicker({ value, onChange, disabled }: Props) {
                         key={name}
                         capacidade={capacidade}
                         marcada={marcada}
-                        bloqueada={!marcada && cheio}
+                        bloqueada={!marcada && (cheio || !capacidade.marcavel)}
                         onToggle={() => alternarCapacidade(name)}
                         disabled={disabled}
                       />

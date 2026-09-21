@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useContactList } from "@/hooks/contacts/useContactList";
 import { ContactsTable } from "@/components/contacts/ContactsTable";
+import { PontoDaEtiqueta } from "@/components/tags/PontoDaEtiqueta";
 import { NewContactDialog } from "@/components/contacts/NewContactDialog";
 import { ImportContactsDialog } from "@/components/contacts/ImportContactsDialog";
 import { TAG_DE_CLIENTE } from "@/lib/contacts/cliente";
@@ -28,6 +29,7 @@ const SOURCE_OPTIONS = [
   { value: undefined, label: "Todas as origens" },
   { value: "manual", label: "Manual" },
   { value: "whatsapp", label: "WhatsApp" },
+  { value: "site", label: "Site (landing page)" },
   { value: "nuvemshop", label: "Nuvemshop" },
   { value: "import_csv", label: "Importado (CSV)" },
   // Os dois valores que a atribuição de anúncio grava em `contacts.source`
@@ -153,6 +155,7 @@ export function ContactsListClient() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" disabled={tagOptions.length === 0}>
+              {tag ? <PontoDaEtiqueta tag={tag} className="mr-2" /> : null}
               {tag ? `${t("Tag")}: ${tag}` : `${t("Tag")}: ${t("todas")}`}
             </Button>
           </DropdownMenuTrigger>
@@ -162,6 +165,7 @@ export function ContactsListClient() {
             <DropdownMenuItem onClick={() => setTag(undefined)}>{t("Todas")}</DropdownMenuItem>
             {tagOptions.map((tagOption) => (
               <DropdownMenuItem key={tagOption} onClick={() => setTag(tagOption)}>
+                <PontoDaEtiqueta tag={tagOption} className="mr-2" />
                 {tagOption}
               </DropdownMenuItem>
             ))}

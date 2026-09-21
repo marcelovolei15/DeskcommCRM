@@ -20,8 +20,7 @@ import { deriveVideoText } from "@/lib/messaging/media/video-derive";
 import { apiTranscriptionProvider } from "@/lib/messaging/media/transcription";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
-import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
+import { motivoDaRecusaDeDestino } from "@/lib/automation/destinos-internos-autorizados";
 import { DETALHE_TECNICO } from "@/lib/event-log/aviso-de-evento-morto";
 
 export const MEDIA_DERIVE_CONSUMER_KEY = "media_derive_v1";
@@ -88,8 +87,23 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
       string
     >)[msg.type] ?? "mídia";
 
+  // Grava o MARCADOR junto do `failed`, e é o que separa "o agente não sabe que
+  // existe arquivo" de "o agente sabe que não conseguiu ler".
+  //
+  // Sem ele, `get-lead-context` cai no marcador de tipo — `[documento]` — que
+  // diz que veio um arquivo e não diz que a leitura falhou. Medido numa VPS em
+  // produção (17/09): um PDF de catálogo, sem camada de texto, falhou no
+  // extrator; o agente recebeu `[documento]` e respondeu ao cliente que o
+  // material "parece ser de distribuidora/promocional" — uma afirmação sobre um
+  // conteúdo que ele nunca leu. As RECUSAS já entregavam este marcador há
+  // tempos (`MARCADOR_NAO_LIDA`, seis caminhos); só a falha permanente não
+  // entregava, e é justamente a que erra por invenção em vez de silêncio.
+  //
+  // O turno que já rodou não volta atrás — o dreno tem teto de espera. O que
+  // isto conserta é todo turno seguinte da conversa, que lê o histórico.
   const markFailed = async () => {
-    await admin.from("messages").update({ media_derived_status: "failed" })
+    await admin.from("messages")
+      .update({ media_derived_text: MARCADOR_NAO_LIDA, media_derived_status: "failed" })
       .eq("id", msg.id).eq("organization_id", msg.organization_id);
   };
 
@@ -189,13 +203,18 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
     // não tem nada a dizer sobre isso: ele recusa destino INTERNO, e este caso é
     // um destino externo perfeitamente público.
     //
-    // Enquanto o dono do produto não decide a regra (documento de decisão 22),
-    // a triagem escolhe o desfecho conservador: com endereço da organização e
-    // chave da instalação, a leitura é RECUSADA com aviso na Central, em vez de
-    // a chave sair. Quem cadastra a credencial da própria empresa segue
-    // funcionando — que é o caminho que o produto já oferece na mesma tela.
-    const chaveEhDaInstalacao = [llmCfg.anthropicApiKey, llmCfg.openaiApiKey, llmCfg.openrouterApiKey]
-      .some((k) => typeof k === "string" && k !== "" && k === llm.apiKey);
+    // Decisão 22-a do dono do produto: endereço próprio exige chave própria.
+    // Com endereço da organização e chave da instalação, a leitura é RECUSADA
+    // com aviso na Central, em vez de a chave sair. Quem cadastra a credencial
+    // da própria empresa segue funcionando — que é o caminho que o produto já
+    // oferece na mesma tela. O turno do agente aplica o mesmo corte no seam
+    // (`run-model-call.ts`).
+    //
+    // A origem vem do RESOLVEDOR, que é quem sabe qual degrau da escada
+    // escolheu a chave. Até aqui ela era deduzida comparando o plaintext com as
+    // chaves do `.env` — uma segunda cópia da escada, que o chat não tinha e que
+    // divergiria no primeiro degrau novo.
+    const chaveEhDaInstalacao = llm.origemDaChave === "chave_da_instalacao";
 
     // O 5º argumento é a `base_url` do binding: o factory precisa dela para não
     // cair no endpoint padrão do provedor (ver o comentário lá em cima).
@@ -234,10 +253,11 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
       // parou; este diz o que fazer (a orientação da política aponta
       // Provedores de IA).
       //
-      // ⚠️ Aqui o agente NÃO recebeu o marcador de "não consegui interpretar":
-      // a exceção não grava `media_derived_text`, e o turno já seguiu sem o
-      // texto no teto de espera do dreno do agent-engine. Por isso a
-      // consequência é outra que a das recusas, e vai explícita.
+      // O marcador de "não consegui interpretar" agora É gravado por
+      // `markFailed` — a consequência é a mesma das recusas dali em diante. O
+      // que continua valendo é o turno que já correu: ele seguiu sem o texto,
+      // dentro do teto de espera do dreno do agent-engine, e por isso a frase
+      // fala do PRÓXIMO turno, não do que passou.
       //
       // O `detail` entra porque é a frase do PROVEDOR, e é ela que distingue
       // "chave errada" de "modelo que sua conta não assina" — duas ações
@@ -247,7 +267,7 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
         msg.organization_id,
         rotuloDoTipo,
         "a leitura deu erro em todas as tentativas, ao abrir o arquivo ou ao chamar o provedor de IA",
-        "O conteúdo do arquivo não chegou ao agente.",
+        "O conteúdo do arquivo não chegou ao agente. Da próxima mensagem em diante ele sabe que houve um arquivo que não deu para ler, e responde avisando em vez de supor o que estava nele.",
         detail.slice(0, 200),
       );
     }
@@ -382,12 +402,12 @@ function buildDeriveDeps(
       return MARCADOR_NAO_LIDA;
     }
     if (baseUrlDaVisao) {
-      const recusa = await motivoDaRecusaDeDestino(baseUrlDaVisao);
+      const recusa = await motivoDaRecusaDeDestino(baseUrlDaVisao, "organizacao");
       if (recusa) {
         await avisarMidiaNaoLida(
           orgId,
           "imagem",
-          "o endereço configurado para a visão não foi aceito como destino, então não enviei a imagem nem a chave para lá — confira o endereço do provedor em Agente de IA e Provedores",
+          "o endereço configurado para a visão não foi aceito como destino, então não enviei a imagem nem a chave para lá — confira o endereço do provedor em Agente de IA e Provedores; endereço escolhido pela empresa não pode apontar para a rede interna do servidor",
           undefined,
           recusa,
         );
@@ -445,13 +465,13 @@ function buildDeriveDeps(
     transcribe: async (audio, mime) => {
       const enderecoDoServico = env.TRANSCRIPTION_BASE_URL;
       const recusa = enderecoDoServico
-        ? await motivoDaRecusaDeDestino(enderecoDoServico)
+        ? await motivoDaRecusaDeDestino(enderecoDoServico, "instalacao")
         : null;
       if (recusa) {
         await avisarMidiaNaoLida(
           orgId,
           "áudio",
-          "o endereço configurado para a transcrição não foi aceito como destino, então não enviei o áudio nem a chave para lá — confira TRANSCRIPTION_BASE_URL",
+          "o endereço configurado para a transcrição não foi aceito como destino, então não enviei o áudio nem a chave para lá — confira TRANSCRIPTION_BASE_URL; se o serviço roda na rede interna, quem administra a instalação libera o endereço em Administração › Destinos internos",
           undefined,
           recusa,
         );
@@ -524,25 +544,6 @@ export function textoDoAvisoDeMidiaNaoLida(aviso: {
       `Para resolver, ajuste o modelo desse ponto em Agente de IA → Provedores, ou cadastre a chave necessária em Credenciais.` +
       (aviso.detalheTecnico ? ` ${DETALHE_TECNICO} ${aviso.detalheTecnico}` : ""),
   };
-}
-
-/**
- * O motivo pelo qual um endereço configurado pela instalação não pode receber
- * a mídia — e a credencial da instalação que a acompanha —, ou null quando
- * pode.
- *
- * São os MESMOS dois guardas que as saídas de webhook já aplicam, na mesma
- * ordem: o textual julga de graça o que dá para julgar sem rede, e o de DNS
- * paga a resolução para julgar o IP por trás do nome.
- */
-async function motivoDaRecusaDeDestino(endereco: string): Promise<string | null> {
-  try {
-    assertSafeOutboundUrl(endereco);
-    await assertDestinoResolvidoSeguro(new URL(endereco).hostname);
-    return null;
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
 }
 
 async function avisarMidiaNaoLida(

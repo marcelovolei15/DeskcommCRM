@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/api/types";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useSystemVersion } from "@/hooks/system/useSystemVersion";
 import { markdownParaTextoSimples } from "@/lib/system/changelog";
+import { textoDaRodadaDoBanco } from "@/lib/system/update-run";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useT } from "@/hooks/i18n/useT";
@@ -142,19 +143,46 @@ export function UpdatePanel() {
    * `just_updated` é essa janela, e só ela: na batida seguinte o host confirma,
    * o campo vira `false` sozinho e a tela cai no texto normal de quem está em
    * dia. Não é um estado que alguém precise fechar.
+   *
+   * ## O que esta janela NÃO pode dizer: "você está na versão X"
+   *
+   * O run bem-sucedido é a notícia de que o `update.sh` foi até o fim — não de
+   * que o app está RODANDO na imagem nova. Enquanto o host bate o heartbeat a
+   * diferença some em minutos; quando ele não bate (agente morto, cron
+   * removido, token vencido), ela vira afirmação eterna: medido em produção,
+   * esta tela dizia `1.32.0` com o container rodando `1.23.0`.
+   *
+   * Então a tela nomeia a versão-alvo como PEDIDO — "a atualização para a
+   * versão X terminou" — e diz, na mesma frase, qual é a última versão que o
+   * host CONFIRMOU (`current_version`, a mesma que a tela usa em todos os
+   * outros estados). Sem botão: o pedido já foi atendido, e reoferecê-lo era o
+   * outro defeito desta janela.
    */
+  // O que a rodada do banco contou de si mesma, em português de gente. Vale nos
+  // dois desfechos em que o servidor mexeu no banco (deu certo / voltou atrás):
+  // quem clicou tem o direito de saber que a base estava ocupada, quantas
+  // retentativas custou e em qual passada fechou. Sem registro na rodada isto é
+  // `null`, e a tela fica calada em vez de afirmar zero.
+  const contaDoBanco = textoDaRodadaDoBanco(data.run?.rodada_do_banco);
+
   if (data.just_updated) {
+    const pedida = semV(data.run?.to_version);
     return (
-      <Layout titulo={`${t("Pronto — você está na versão")} ${versao}`}>
+      <Layout titulo={`${t("A atualização para a versão")} ${pedida} ${t("terminou")}`}>
         <p className="text-sm">
-          {t("A atualização terminou e o sistema já está no ar na versão")}{" "}
+          {t(
+            "O servidor ainda não me confirmou em que versão ele voltou ao ar — a última versão que ele confirmou é a",
+          )}{" "}
           <strong>{versao}</strong>.
         </p>
         <p className="mt-3 text-sm text-muted-foreground">
           {t(
-            "O servidor confirma isso na próxima vez que falar comigo, daqui a alguns minutos — até lá, esta tela já sabe.",
+            "Assim que ele falar comigo, daqui a alguns minutos, esta tela se atualiza sozinha. Não ofereço atualizar de novo: o pedido já foi atendido.",
           )}
         </p>
+        {contaDoBanco ? (
+          <p className="mt-3 text-sm text-muted-foreground">{t(contaDoBanco)}</p>
+        ) : null}
       </Layout>
     );
   }
@@ -181,6 +209,9 @@ export function UpdatePanel() {
           {t("funciona com ele. Se quiser desfazer também o banco, use a cópia de segurança feita antes da tentativa (")}
           <code>bash hostgator-setup-kit/restore.sh</code>).
         </p>
+        {contaDoBanco ? (
+          <p className="mt-3 text-sm text-muted-foreground">{t(contaDoBanco)}</p>
+        ) : null}
         <DetalhesTecnicos texto={data.run.log_tail} />
         <Saida
           botao={false}

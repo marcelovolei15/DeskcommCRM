@@ -18,9 +18,8 @@
 
 ### 📌 Contribuindo de um fork? Você está no lugar certo.
 
-**Duas coisas vão parecer erro seu e não são** — e nenhuma é motivo para fechar o PR:
+**Uma coisa vai parecer erro seu e não é** — e ela não é motivo para fechar o PR:
 
-- **`Vercel` vermelho** (`Authorization required to deploy`): esperado em PR de fork, porque a `main` faz deploy de produção. **Não entra no gate de merge.**
 - **Workflows parados** esperando aprovação: política do GitHub no primeiro PR de quem nunca contribuiu. Um mantenedor libera.
 
 <details>
@@ -41,6 +40,7 @@
 
 <!-- Contribuindo de fora? Marque o que conseguiu; o resto é nosso. Nada aqui trava PR externo. -->
 
+- [ ] `pnpm cercas` zerado (~30 s — as guardas estruturais que mais reprovam PR)
 - [ ] `pnpm typecheck` zerado
 - [ ] `pnpm lint` zerado
 - [ ] Testes relevantes existem e passam (`pnpm test:unit`)

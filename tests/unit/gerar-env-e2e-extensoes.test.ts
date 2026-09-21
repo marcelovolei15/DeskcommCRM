@@ -22,7 +22,7 @@ describe("o preparo habitual do E2E inclui o catálogo local de extensões", () 
 set -eu
 if [ "$*" = 'status' ]; then exit 0; fi
 if [ "$*" = 'status -o env' ]; then
-  printf '%s\\n' 'API_URL="http://127.0.0.1:54321"' 'ANON_KEY="synthetic-anon"' 'SERVICE_ROLE_KEY="synthetic-service"'
+  printf '%s\\n' 'API_URL="http://127.0.0.1:54321"' 'ANON_KEY="synthetic-anon"' 'SERVICE_ROLE_KEY="synthetic-service"' 'DB_URL="postgresql://postgres:senha-sintetica@127.0.0.1:54322/postgres"'
   exit 0
 fi
 exit 2

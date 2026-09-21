@@ -1,6 +1,7 @@
 "use client";
 
 import { useT } from "@/hooks/i18n/useT";
+import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useMemo, useState } from "react";
 import { FUSOS_OFERECIDOS } from "@/lib/tempo/fusos";
 
@@ -123,6 +124,59 @@ function StatusBadge({ attendant, now }: { attendant: Attendant; now: Date }) {
     <Badge variant="outline" className="text-muted-foreground">
       {t("Desligado")}
     </Badge>
+  );
+}
+
+/**
+ * O SEGUNDO SELO DA MESMA CÉLULA: "tem alguém aí?" (issue #996).
+ *
+ * O selo de cima diz se a pessoa ESTÁ DE PLANTÃO — decisão dela, limitada pela
+ * jornada. Este diz se o NAVEGADOR dela está aberto agora, que é outra coisa e
+ * mora em outra coluna (`last_heartbeat_at`). Os dois lado a lado é o ponto: o
+ * operador que via "De plantão" e ligava para a pessoa sem resposta passa a
+ * enxergar as duas metades na mesma linha, sem que uma apague a outra.
+ *
+ * O valor vem do SERVIDOR (`present`, derivado com o prazo de
+ * `lib/atendimento/presenca.ts`), e não de uma conta feita aqui: recalculá-lo
+ * nesta tela criaria a segunda régua do mesmo número — exatamente o defeito que
+ * o #720 mediu entre esta tela e o roteador. O carimbo exato vai no `title`
+ * para quem precisa do "quando", e a hora aparece ao lado do selo.
+ *
+ * ⚠️ Presença NÃO é plantão e não desliga plantão: este selo é leitura pura.
+ */
+function PresenceBadge({ attendant }: { attendant: Attendant }) {
+  const t = useT();
+  const tagDoIdioma = useTagDeIdioma();
+  const carimbo = attendant.availability?.last_heartbeat_at ?? null;
+  const presente = !!attendant.availability?.present;
+  const hora =
+    carimbo === null
+      ? null
+      : new Date(carimbo).toLocaleTimeString(tagDoIdioma, { hour: "2-digit", minute: "2-digit" });
+
+  if (hora === null) {
+    return (
+      <Badge variant="neutral" data-testid="presenca" data-presente="nao">
+        {t("Sem sinal de tela")}
+      </Badge>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      {presente ? (
+        <Badge variant="success" data-testid="presenca" data-presente="sim" title={carimbo ?? ""}>
+          {t("Com a tela aberta")}
+        </Badge>
+      ) : (
+        <Badge variant="neutral" data-testid="presenca" data-presente="nao" title={carimbo ?? ""}>
+          {t("Sem sinal de tela")}
+        </Badge>
+      )}
+      <span className="text-xs text-muted-foreground">
+        {t("último sinal às")} {hora}
+      </span>
+    </span>
   );
 }
 
@@ -459,7 +513,10 @@ export function AttendantsClient({ canManage }: Props) {
                       ) : null}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge attendant={a} now={now} />
+                      <div className="flex flex-col items-start gap-1.5">
+                        <StatusBadge attendant={a} now={now} />
+                        <PresenceBadge attendant={a} />
+                      </div>
                     </TableCell>
                     <TableCell>
                       <span className={load >= capacity ? "font-medium text-destructive" : ""}>

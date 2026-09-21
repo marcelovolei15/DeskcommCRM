@@ -46,6 +46,10 @@ import { ToolPicker } from "./ToolPicker";
 import { TriggerEditor, type TriggerValue } from "./TriggerEditor";
 import { HandoffKeywordsInput } from "./HandoffKeywordsInput";
 import { FollowupFlowPicker } from "./FollowupFlowPicker";
+import {
+  FollowupWindowEditor,
+  type FollowupWindowValue,
+} from "./FollowupWindowEditor";
 import { PainelDoOperador } from "./PainelDoOperador";
 import { PainelDeSeguranca } from "./PainelDeSeguranca";
 import { BasesDoAgente, type MaterialDoAcervo } from "./BasesDoAgente";
@@ -75,6 +79,18 @@ import type { FunilDaResposta } from "@/hooks/pipelines/usePipelines";
  * de quem monta a lista (é lá que mora o filtro de canal arquivado).
  */
 export type { ChannelSessionLite };
+
+/**
+ * O id que liga o botão "Publicar" ao TEXTO que diz por que ele está desabilitado.
+ *
+ * O motivo vivia só no `title` de um span: aparecia com o ponteiro parado em
+ * cima. Em tela de toque não existe hover — nunca aparecia —, e o botão
+ * desabilitado nem entra na ordem do Tab, então quem navega de teclado também
+ * não sabia o que faltava para o agente entrar no ar. Além do texto na tela, o
+ * `aria-describedby` do botão aponta para cá: quem chega pelo leitor de tela
+ * ouve o motivo junto do rótulo, sem depender de hover.
+ */
+const ID_DO_MOTIVO_DO_PUBLICAR = "motivo-do-publicar";
 
 interface BaseProps {
   credentials: CredentialRow[];
@@ -166,9 +182,15 @@ interface FormState {
 interface FollowupValue {
   enabled: boolean;
   flow_pointer_ids: string[];
+  /** Ausente em versões antigas; null = sem janela própria. */
+  send_window?: FollowupWindowValue | null;
 }
 
-const DEFAULT_FOLLOWUP: FollowupValue = { enabled: false, flow_pointer_ids: [] };
+const DEFAULT_FOLLOWUP: FollowupValue = {
+  enabled: false,
+  flow_pointer_ids: [],
+  send_window: null,
+};
 
 const DEFAULT_TRIGGER: TriggerValue = {
   events: ["message"],
@@ -459,8 +481,11 @@ export function AgentForm(props: Props) {
     setSaving(true);
     try {
       if (isEdit) {
-        // A mesma régua do servidor, aqui, para o erro aparecer no campo em vez
-        // de voltar como 500 depois de a versão já ter sido gravada.
+        // A mesma régua do cadastro que a Server Action valida de novo
+        // (_actions.ts, `agentMcpPatchSchema` — não a da rota REST, que é
+        // `agentPatchSchema` e diverge em name/description), aqui só para o erro
+        // aparecer no campo em vez de voltar como 500 depois de a versão já ter
+        // sido gravada.
         const cadastro = agentMcpPatchSchema.safeParse(toCadastroPayload(form));
         if (!cadastro.success) {
           toast.error(t("Validação falhou."));
@@ -605,6 +630,7 @@ export function AgentForm(props: Props) {
                 variant="default"
                 onClick={() => setConfirmOpen(true)}
                 disabled={disabled || publishBlockReason !== null}
+                aria-describedby={publishBlockReason ? ID_DO_MOTIVO_DO_PUBLICAR : undefined}
               >
                 {publishing
                   ? t("Publicando…")
@@ -616,6 +642,27 @@ export function AgentForm(props: Props) {
           ) : null}
         </div>
       </div>
+
+      {/*
+        O MOTIVO NA TELA, não só no `title` (issue #951).
+
+        O `title` do span acima continua ali para quem usa mouse, mas ele é
+        hover: em tela de toque não existe, e um botão desabilitado nem entra na
+        ordem do Tab — a explicação do bloqueio ficava inalcançável justamente
+        para quem mais precisa dela. Aqui o MESMO motivo (`publishBlockReason`) é
+        texto da tela, e o `aria-describedby` do botão o anuncia junto do rótulo.
+      */}
+      {isEdit && publishBlockReason ? (
+        <p
+          id={ID_DO_MOTIVO_DO_PUBLICAR}
+          data-testid={ID_DO_MOTIVO_DO_PUBLICAR}
+          role="status"
+          aria-live="polite"
+          className="-mt-2 text-xs text-muted-foreground"
+        >
+          {publishBlockReason}
+        </p>
+      ) : null}
 
       {/*
         NAVEGAÇÃO POR PAPEL (spec 16 §6). Um form só, um save só — os papéis são
@@ -1153,6 +1200,13 @@ export function AgentForm(props: Props) {
                 "Os fluxos abaixo só entram em ação para um cliente se este agente estiver publicado com follow-up habilitado.",
               )}
             </p>
+            <FollowupWindowEditor
+              value={form.followup.send_window ?? null}
+              onChange={(send_window) =>
+                patch({ followup: { ...form.followup, send_window } })
+              }
+              disabled={disabled || !form.followup.enabled}
+            />
             <FollowupFlowPicker
               value={form.followup.flow_pointer_ids}
               onChange={(ids) =>

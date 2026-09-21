@@ -17,6 +17,7 @@ import { type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { listaAgendamentos, type AgendamentoListado } from "@/lib/agenda/consulta";
+import { donosDaAgenda } from "@/lib/agenda/donos-da-agenda";
 import { lerOcupacaoExterna } from "@/lib/agenda/ocupacao-externa";
 import { fail, ok } from "@/lib/api/wrappers";
 import { logger } from "@/lib/logger";
@@ -83,6 +84,8 @@ const marcarSchema = z.object({
   conversation_id: z.string().uuid().optional(),
   title: z.string().min(1).max(200).optional(),
   notes: z.string().max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  location_details: z.string().max(300).optional(),
   guest_email: emailDoConvidado.optional(),
 });
 
@@ -91,7 +94,7 @@ const alterarSchema = z
     id: z.string().uuid(),
     revision: z.number().int().positive().optional(),
     outcome_message_id: z.string().uuid().optional(),
-    confirmation_next_at: z.string().datetime({offset:true}).optional(),
+    confirmation_next_at: z.string().datetime({ offset: true }).optional(),
     /** Remarcar: o novo início. A duração vem do tipo, como na criação. */
     starts_at: z.string().datetime({ offset: true }).optional(),
     /**
@@ -226,11 +229,29 @@ export async function GET(req: NextRequest): Promise<Response> {
     // semente do servidor faz a MESMA pergunta e recebe a MESMA resposta. A
     // regra — recorte por INTERSEÇÃO de intervalos, como no motor de
     // disponibilidade — mora num lugar só (#525).
-    const { blocos, erro } = await lerOcupacaoExterna(supabase, {
-      organizationId: activeOrg.orgId,
-      de: parsed.data.de,
-      ate: parsed.data.ate,
-    });
+    // A ocupação é perguntada POR DONO (`p_owner`): sem a lista, o Atendente só
+    // recebia a ocupação de quem a RLS da sessão deixava ver — isto é, a dele —
+    // e a grade desenhava livre o horário que o Google da dona já ocupa (#896,
+    // item 3). `organization_id` continua vindo do cookie validado; os donos são
+    // membros DESSA organização, com filtro explícito (mesmo caminho de
+    // `app/api/v1/agenda/pessoas/route.ts`).
+    const { donos, erro: erroDosDonos } = await donosDaAgenda(activeOrg.orgId);
+    if (erroDosDonos) {
+      logger.warn("[agenda.agendamentos] donos da agenda não vieram", {
+        erro: erroDosDonos,
+        requestId,
+      });
+    }
+
+    const { blocos, erro } = await lerOcupacaoExterna(
+      supabase,
+      {
+        organizationId: activeOrg.orgId,
+        de: parsed.data.de,
+        ate: parsed.data.ate,
+      },
+      donos,
+    );
 
     if (erro) {
       logger.warn("[agenda.agendamentos] ocupação do Google não veio", {

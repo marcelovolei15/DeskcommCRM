@@ -53,8 +53,10 @@
  *
  * ── Sem `event_log` ──────────────────────────────────────────────────────────
  *
- * Confirmado lendo `lib/event-log/register-handlers.ts`: os 12 handlers
- * registrados cobrem IA, RAG, LGPD, automações, follow-up e mídia. Nenhum
+ * Confirmado lendo `lib/event-log/register-handlers.ts`: os handlers
+ * registrados cobrem IA, RAG, LGPD, automações, follow-up, mídia e o aviso de
+ * caso ao suporte — para reconferir sem acreditar nesta linha,
+ * `grep -c 'registerHandler(' lib/event-log/register-handlers.ts`. Nenhum
  * cobriria um tipo `platform_branding.*`, e o drain deixa evento sem handler
  * INTOCADO — a linha nasceria `pending` para sempre em todo clone. Evento sem
  * consumer é o anti-pattern nº 3 do CLAUDE.md. O registro desta mutação é
@@ -327,8 +329,8 @@ function avisarUmaVez(chave: string, mensagem: string, contexto: Record<string, 
  * cai na camada do `.env`, que é uma instalação funcionando.
  *
  * O caso `42P01` (relation does not exist) é o rollback pela OUTRA ponta: código
- * novo sobre schema velho — o que acontece na Vercel, onde a `main` sobe sem
- * ninguém aplicar migration. Ele degrada para o `.env` igual, com um aviso.
+ * novo sobre schema velho — o que acontece quando a imagem nova sobe antes de o
+ * baseline ser aplicado. Ele degrada para o `.env` igual, com um aviso.
  */
 export async function marcaDaInstalacao(): Promise<LinhaDaMarca | null> {
   const memoria = memoEmVigor();

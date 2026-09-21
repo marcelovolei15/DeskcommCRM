@@ -66,6 +66,15 @@ export const CANONICAL_LOST_REASONS = [
   "cancelled_by_customer",
   "payment_failed",
   "other",
+  /**
+   * Motivo do SISTEMA, não da lista do operador: é com ele que a troca de funil
+   * encerra a origem (`lib/leads/motivo-da-perda.ts`, `MOTIVO_DA_TRANSFERENCIA`)
+   * e é ele que `fn_attendant_metrics` NÃO conta como perda (migration 0266).
+   * Consta aqui porque esta lista é o espelho do array canônico do trigger
+   * `fn_validate_lost_reason_required`: um motivo aceito pelo banco e ausente
+   * daqui é uma recusa de tela para uma escrita que funciona.
+   */
+  "moved_to_another_pipeline",
 ] as const;
 export type CanonicalLostReason = (typeof CANONICAL_LOST_REASONS)[number];
 
@@ -90,7 +99,17 @@ export const createLeadSchema = z.object({
   description: z.string().max(2000).nullable().optional(),
   contact_id: z.string().uuid().nullable().optional(),
   value_cents: z.coerce.number().int().nonnegative().nullable().optional(),
-  currency: z.string().length(3).default("BRL"),
+  /**
+   * Sem `default`, e isso É o conserto.
+   *
+   * Com `.default("BRL")` o campo nunca chegava ausente ao handler: quem
+   * omitia a moeda recebia real, e uma organização que declarou peso ou dólar
+   * em Configurações via cada lead novo nascer em BRL — o mesmo defeito que a
+   * migration 0208 consertou no catálogo de produtos, repetido no funil. O
+   * padrão não é do schema porque ele não sabe de que organização se trata; é
+   * do handler, que resolve pela `moedaDaOrganizacao()`.
+   */
+  currency: z.string().length(3).optional(),
   owner_user_id: z.string().uuid().nullable().optional(),
   /** Dono agente já na criação (0070) — mesma regra do update: os dois é 422. */
   owner_agent_id: z.string().uuid().nullable().optional(),

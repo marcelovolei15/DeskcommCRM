@@ -115,7 +115,7 @@ export function NewLeadDialog({
     if (reais.length > 0) {
       valueCents = parseReaisToCents(reais);
       if (valueCents === null) {
-        form.setError("valueReais", { message: "Valor inválido" });
+        form.setError("valueReais", { message: t("Valor inválido") });
         return;
       }
     }
@@ -124,7 +124,10 @@ export function NewLeadDialog({
       pipeline_id: pipelineId,
       stage_id: values.stage_id,
       title: values.title.trim(),
-      currency: "BRL",
+      // A moeda NÃO vai daqui. O browser não sabe a moeda da organização, e
+      // mandar "BRL" fazia toda instalação em peso ou dólar cadastrar lead em
+      // real. Omitir é o conserto: quem decide é o servidor, que lê a
+      // organização (`moedaDaOrganizacao`, em `createLeadHandler`).
       source: "manual",
       tags,
     };
@@ -199,7 +202,7 @@ export function NewLeadDialog({
             <Label htmlFor="title">{t("Título")}</Label>
             <Input
               id="title"
-              placeholder="Ex: Pedido Maria — combo presente"
+              placeholder={t("Ex: Pedido Maria — combo presente")}
               {...form.register("title", { required: true, minLength: 2 })}
             />
           </div>
@@ -237,7 +240,7 @@ export function NewLeadDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="valueReais">Valor (R$)</Label>
+              <Label htmlFor="valueReais">{t("Valor (R$)")}</Label>
               <Input
                 id="valueReais"
                 inputMode="decimal"
@@ -277,10 +280,10 @@ export function NewLeadDialog({
               onClick={() => onOpenChange(false)}
               disabled={create.isPending}
             >
-              Cancelar
+              {t("Cancelar")}
             </Button>
             <Button type="submit" disabled={create.isPending || !stageId}>
-              {create.isPending ? "Criando…" : "Criar lead"}
+              {create.isPending ? t("Criando…") : t("Criar lead")}
             </Button>
           </DialogFooter>
         </form>

@@ -109,8 +109,27 @@ describe("os elos que somem sem barulho", () => {
     // para preencher o próprio formulário. Sem este caso, ele volta a ser
     // decorativo no dia em que alguém "simplificar" o resolvedor.
     const servidor = readFileSync("lib/auth/server.ts", "utf8");
+    // ⚠️ ESTA CERCA FOI AFROUXADA EM 2026-09-20, e o que ela perdeu está escrito
+    // aqui para o próximo não afrouxar mais um degrau sem saber o que sobra.
+    //
+    // Era `/organizations\(display_name, locale\)/` — a lista INTEIRA, na ordem.
+    // Quando o embed ganhou `timezone` (a Agenda passou a abrir a semana no fuso
+    // de quem olha), esta cerca reprovou um ACRÉSCIMO, que é o contrário do que
+    // ela existe para vigiar.
+    //
+    //   o que ela guarda HOJE: o embed da membership traz uma coluna chamada
+    //     `locale`. Medido nos dois sentidos — tirar `locale` da consulta deixa
+    //     este caso vermelho; acrescentar coluna nova o mantém verde.
+    //   o que a versão antiga pegava a mais: só a ORDEM e a lista exata das
+    //     colunas. Nenhuma dessas duas é propriedade do produto: trocar a ordem
+    //     do `select` não muda o que chega à sessão, e a lista fechada só
+    //     produzia alarme em quem acrescentava.
+    //   o que NENHUMA das duas pega: um `locale` que venha de um embed ANINHADO
+    //     (`organizations(display_name, outra(locale))`) satisfaria o padrão sem
+    //     ser a coluna da organização. É o limite conhecido desta sonda — quem
+    //     precisar fechá-lo tem de ler o valor, não o texto do arquivo.
     expect(servidor, "a membership deixou de trazer o idioma da organização").toMatch(
-      /organizations\(display_name, locale\)/,
+      /organizations\((?=[^)]*\blocale\b)[^)]*\)/,
     );
     expect(servidor, "o idioma da sessão parou de cair na organização").toMatch(
       /locale \?\? \(await localeDaOrgAtiva\(memberships\)\)/,
@@ -122,6 +141,14 @@ describe("os elos que somem sem barulho", () => {
     // sabe permissão. Traduzir é apresentação.
     const layout = readFileSync("app/app/layout.tsx", "utf8");
     expect(layout).toMatch(/<IdiomaProvider locale=\{user\.idioma\}>/);
+    // E nenhuma outra tela com sessão pula a cadeia: onboarding e get-started
+    // passavam `user.locale` (só a preferência) ao provider enquanto o texto do
+    // servidor da mesma tela usava `user.idioma` — metade da tela em cada língua.
+    for (const tela of ["app/onboarding/layout.tsx", "app/get-started/page.tsx"]) {
+      expect(readFileSync(tela, "utf8"), `${tela} passa a preferência crua ao provider`).not.toMatch(
+        /<IdiomaProvider locale=\{user\.locale\}>/,
+      );
+    }
     // O IMPORT, não a palavra: o cabeçalho do arquivo EXPLICA por que não
     // depende da autenticação, e a primeira versão deste caso ficava vermelha
     // por causa do próprio comentário que documenta a decisão.
