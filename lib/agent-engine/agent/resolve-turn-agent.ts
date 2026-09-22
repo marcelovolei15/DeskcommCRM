@@ -66,7 +66,16 @@ import {
   loadPublishedAgentConfigById,
   type PublishedAgentConfig,
 } from './agent-config';
-import { classifyIntent } from './intent-classifier';
+import { classifyIntent, type ClassifierContextMessage } from './intent-classifier';
+
+/**
+ * Janela de contexto passada ao CLASSIFICADOR, não confundir com
+ * `context_message_window` do agente (esse alimenta o modelo que conversa
+ * com o lead). Curta de propósito: o classificador roda em todo turno,
+ * inclusive sticky (regra 2 abaixo) — histórico completo pagaria caro por
+ * turno pra resolver só ambiguidade de resposta curta.
+ */
+const CLASSIFIER_CONTEXT_MESSAGES = 4;
 
 export interface TurnAgentResolution {
   config: PublishedAgentConfig | null; // null ⇒ turno segue no genérico (comportamento atual)
@@ -96,6 +105,8 @@ export async function resolveTurnAgent(
     signal: string | null;
     stickyAgentId: string | null;
     stickyIntent: string | null;
+    /** Mensagens anteriores ao signal, mais antiga → mais recente. Default []. */
+    recentMessages?: ClassifierContextMessage[];
   },
   deps: ResolveTurnAgentDeps,
 ): Promise<TurnAgentResolution> {
@@ -195,7 +206,14 @@ export async function resolveTurnAgent(
     const verdict = await _classifyIntent(
       db,
       llmCfg,
-      { tenantId: input.tenantId, leadId: input.leadId, jobId: input.jobId, router, signal: input.signal },
+      {
+        tenantId: input.tenantId,
+        leadId: input.leadId,
+        jobId: input.jobId,
+        router,
+        signal: input.signal,
+        recentMessages: input.recentMessages ?? [],
+      },
       { log: deps.log },
     );
 
@@ -261,15 +279,32 @@ export async function resolveConversationTurn(
     'select active_ai_agent_id,active_intent from conversations where organization_id=$1 and id=$2',
     [input.tenantId, input.conversationId],
   );
-  const signal = input.inbound
-    ? (await db.query<{ body: string | null }>(
-        "select body from messages where organization_id=$1 and conversation_id=$2 and direction='inbound' order by sent_at desc,created_at desc,id desc limit 1",
+  const signalRow = input.inbound
+    ? (await db.query<{ id: string; body: string | null }>(
+        "select id,body from messages where organization_id=$1 and conversation_id=$2 and direction='inbound' order by sent_at desc,created_at desc,id desc limit 1",
         [input.tenantId, input.conversationId],
-      )).rows[0]?.body ?? null
+      )).rows[0] ?? null
     : null;
+  const signal = signalRow?.body ?? null;
+
+  // Contexto curto pro CLASSIFICADOR (regra 2 abaixo desambigua resposta
+  // curta em meio a fluxo) — nunca o histórico completo. Só busca quando há
+  // signal: sem inbound (regra 6) o classificador nem roda.
+  let recentMessages: ClassifierContextMessage[] = [];
+  if (signalRow !== null) {
+    const { rows: contextRows } = await db.query<{ direction: 'inbound' | 'outbound'; body: string | null }>(
+      `select direction,body from messages
+       where organization_id=$1 and conversation_id=$2 and body is not null and id<>$3
+       order by sent_at desc,created_at desc,id desc limit $4`,
+      [input.tenantId, input.conversationId, signalRow.id, CLASSIFIER_CONTEXT_MESSAGES],
+    );
+    recentMessages = contextRows.reverse().map((r) => ({ direction: r.direction, body: r.body! }));
+  }
+
   return resolveTurnAgent(db, llmCfg, {
     ...input,
     signal,
+    recentMessages,
     stickyAgentId: rows[0]?.active_ai_agent_id ?? null,
     stickyIntent: rows[0]?.active_intent ?? null,
   }, deps);
