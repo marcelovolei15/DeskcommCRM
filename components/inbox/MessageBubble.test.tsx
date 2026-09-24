@@ -135,3 +135,52 @@ describe("MessageBubble — rótulo de origem", () => {
     expect(screen.queryByText("IA")).not.toBeInTheDocument();
   });
 });
+
+describe("MessageBubble — contenção de layout e quebra de palavras (#1451)", () => {
+  it("texto longo sem espaços (ex: chave Pix) tem quebra forçada wrap-anywhere e bolha tem min-w-0", () => {
+    const pixLongo =
+      "00020126580014br.gov.bcb.pix0136a1b2c3d4-e5f6-7890-abcd-ef1234567890520400005303986540510.005802BR5913TESTE TESTE6008BRASILIA62070503***6304ABCD";
+    const { container } = render(<MessageBubble message={msg({ body: pixLongo })} />);
+
+    const p = screen.getByText(pixLongo);
+    expect(p).toBeInTheDocument();
+    expect(p.className).toContain("wrap-anywhere");
+    // O Tailwind 4 gera `.break-words` (overflow-wrap: break-word) DEPOIS da
+    // classe arbitrária `[overflow-wrap:anywhere]`, com a mesma especificidade:
+    // juntas, vence o break-word e a quebra forçada fica sem efeito.
+    expect(p.className).not.toContain("break-words");
+
+    const bolha = p.closest(".max-w-\\[75\\%\\]");
+    expect(bolha).not.toBeNull();
+    expect(bolha?.className).toContain("min-w-0");
+
+    const linha = container.firstElementChild as HTMLElement;
+    expect(linha.className).toContain("min-w-0");
+  });
+});
+
+describe("pino compartilhado pelo cliente", () => {
+  it("vira cartão que abre o mapa, no lugar do link cru", () => {
+    render(
+      <MessageBubble
+        message={msg({
+          direction: "inbound",
+          sent_via: "external_device",
+          type: "location",
+          body: "📍 https://maps.google.com/?q=-25.33,-57.54",
+          metadata: { location: { latitude: -25.33, longitude: -57.54 } },
+        })}
+      />,
+    );
+    const link = screen.getByRole("link", { name: /Abrir no mapa/ });
+    expect(link.getAttribute("href")).toBe("https://maps.google.com/?q=-25.33,-57.54");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(screen.queryByText("📍 https://maps.google.com/?q=-25.33,-57.54")).toBeNull();
+  });
+
+  it("sem coordenadas, o corpo aparece como sempre", () => {
+    render(<MessageBubble message={msg({ direction: "inbound", type: "location", body: "📍 Location" })} />);
+    expect(screen.getByText("📍 Location")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Abrir no mapa/ })).toBeNull();
+  });
+});

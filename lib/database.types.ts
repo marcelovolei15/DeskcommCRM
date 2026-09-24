@@ -2368,6 +2368,7 @@ export type Database = {
           agent_id: string
           created_at: string
           examples: string[]
+          flow_pointer_id: string | null
           id: string
           intent_description: string
           intent_name: string
@@ -2380,6 +2381,7 @@ export type Database = {
           agent_id: string
           created_at?: string
           examples?: string[]
+          flow_pointer_id?: string | null
           id?: string
           intent_description: string
           intent_name: string
@@ -2392,6 +2394,7 @@ export type Database = {
           agent_id?: string
           created_at?: string
           examples?: string[]
+          flow_pointer_id?: string | null
           id?: string
           intent_description?: string
           intent_name?: string
@@ -2407,6 +2410,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "ai_agents"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_router_members_flow_pointer_mesma_org"
+            columns: ["organization_id", "flow_pointer_id"]
+            isOneToOne: false
+            referencedRelation: "followup_flow_pointers"
+            referencedColumns: ["organization_id", "id"]
           },
           {
             foreignKeyName: "ai_router_members_organization_id_fkey"
@@ -6778,6 +6788,7 @@ export type Database = {
           parameter_format: string
           quality_score: string | null
           rejected_reason: string | null
+          saved_values: Json
           status: string
           synced_at: string
           updated_at: string
@@ -6796,6 +6807,7 @@ export type Database = {
           parameter_format?: string
           quality_score?: string | null
           rejected_reason?: string | null
+          saved_values?: Json
           status: string
           synced_at?: string
           updated_at?: string
@@ -6814,6 +6826,7 @@ export type Database = {
           parameter_format?: string
           quality_score?: string | null
           rejected_reason?: string | null
+          saved_values?: Json
           status?: string
           synced_at?: string
           updated_at?: string
